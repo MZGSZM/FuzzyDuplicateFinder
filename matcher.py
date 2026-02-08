@@ -8,21 +8,24 @@ SIMILARITY_THRESHOLD = 70.0
 
 class Matcher:
     def __init__(self, db_path):
-        """
-        Initialize the matcher with a specific database file.
-        """
         if not os.path.exists(db_path):
             raise FileNotFoundError(f"Database not found at {db_path}")
         
         self.conn = sqlite3.connect(db_path)
         self.conn.row_factory = sqlite3.Row 
 
+    def close(self):
+        """Explicitly close connection."""
+        try:
+            self.conn.close()
+        except:
+            pass
+
     def fetch_all_files(self):
         cursor = self.conn.execute("SELECT * FROM files")
         return [dict(row) for row in cursor.fetchall()]
 
     def find_exact_duplicates(self):
-        """Finds files that are binary identical (MD5)."""
         query = """
         SELECT exact_hash, COUNT(*) as count 
         FROM files 
@@ -39,13 +42,10 @@ class Matcher:
         return exact_groups
 
     def calculate_score(self, file_a, file_b):
-        """
-        Mathematical similarity scoring (0-100).
-        """
         score = 0
         total_weight = 0
         
-        # 1. VISUAL SIMILARITY (Weight: 50%)
+        # 1. VISUAL
         if file_a['visual_hash'] and file_b['visual_hash']:
             try:
                 h1 = imagehash.hex_to_hash(file_a['visual_hash'])
@@ -56,28 +56,25 @@ class Matcher:
                 total_weight += 0.50
             except: pass
 
-        # 2. AUDIO SIMILARITY (Weight: 50%)
+        # 2. AUDIO
         if file_a['audio_hash'] and file_b['audio_hash']:
-            # Exact Sonic Fingerprint match
             if file_a['audio_hash'] == file_b['audio_hash']:
                 score += 100 * 0.50
-            else:
-                score += 0 # Different sonic fingerprint
             total_weight += 0.50
 
-        # 3. FILENAME SIMILARITY (Weight: 20%)
+        # 3. FILENAME
         name_sim = SequenceMatcher(None, file_a['filename'], file_b['filename']).ratio()
         score += (name_sim * 100) * 0.20
         total_weight += 0.20
 
-        # 4. SIZE SIMILARITY (Weight: 10%)
+        # 4. SIZE
         size_a, size_b = file_a['size'], file_b['size']
         if size_a > 0 and size_b > 0:
             size_sim = (1 - (abs(size_a - size_b) / max(size_a, size_b))) * 100
             score += size_sim * 0.10
             total_weight += 0.10
 
-        # 5. EXTENSION MATCH (Weight: 5%)
+        # 5. EXTENSION
         if file_a['extension'] == file_b['extension']:
             score += 100 * 0.05
             total_weight += 0.05
@@ -85,34 +82,27 @@ class Matcher:
         if total_weight == 0: return 0
         return round(score / total_weight, 1)
 
-    def find_fuzzy_matches(self):
-        """
-        Compares all files to find 'similar' ones based on heuristics.
-        """
+    def find_fuzzy_matches(self, stop_signal=None):
         files = self.fetch_all_files()
         potential_matches = []
         total = len(files)
         
-        # O(n^2) comparison - acceptable for personal collections, slow for massive datasets
         for i in range(total):
+            # CHECK STOP SIGNAL inside the loop
+            if stop_signal and stop_signal():
+                self.close()
+                return []
+
             for j in range(i + 1, total):
                 f1, f2 = files[i], files[j]
                 
-                # OPTIMIZATION: Do not compare disparate media types
-                # e.g., don't compare Audio vs Image
-                
-                is_aud_1 = f1['extension'] in ['.mp3','.wav','.flac','.m4a']
-                is_aud_2 = f2['extension'] in ['.mp3','.wav','.flac','.m4a']
-                is_vis_1 = f1['extension'] in ['.jpg','.png','.mp4','.avi']
-                is_vis_2 = f2['extension'] in ['.jpg','.png','.mp4','.avi']
+                is_aud_1 = f1['extension'] in ['.mp3','.wav','.flac','.m4a','.wma']
+                is_aud_2 = f2['extension'] in ['.mp3','.wav','.flac','.m4a','.wma']
+                is_vis_1 = f1['extension'] in ['.jpg','.png','.mp4','.avi','.m4v','.mov']
+                is_vis_2 = f2['extension'] in ['.jpg','.png','.mp4','.avi','.m4v','.mov']
 
-                # If one is audio and the other isn't, skip (unless names match perfectly)
-                if (is_aud_1 != is_aud_2) and (f1['filename'] != f2['filename']):
-                    continue
-                
-                # If one is visual and the other isn't, skip
-                if (is_vis_1 != is_vis_2) and (f1['filename'] != f2['filename']):
-                    continue
+                if (is_aud_1 != is_aud_2) and (f1['filename'] != f2['filename']): continue
+                if (is_vis_1 != is_vis_2) and (f1['filename'] != f2['filename']): continue
 
                 score = self.calculate_score(f1, f2)
                 if score >= SIMILARITY_THRESHOLD:
@@ -121,10 +111,11 @@ class Matcher:
                         'file_b': f2['path'],
                         'score': score
                     })
+        
+        self.close()
         return potential_matches
 
 if __name__ == "__main__":
-    # Test stub (assumes db exists)
     try:
         m = Matcher("duplicate_index.db")
         print(f"Fuzzy matches found: {len(m.find_fuzzy_matches())}")
