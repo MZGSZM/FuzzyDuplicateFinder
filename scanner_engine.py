@@ -36,7 +36,8 @@ class DatabaseManager:
         self.create_table()
 
     def create_table(self):
-        query = """
+        # Table for Files
+        query_files = """
         CREATE TABLE IF NOT EXISTS files (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             path TEXT UNIQUE,
@@ -51,9 +52,38 @@ class DatabaseManager:
             scan_date TEXT
         )
         """
+        # Table for storing the Scan Roots (Folders & Priorities)
+        query_roots = """
+        CREATE TABLE IF NOT EXISTS scan_roots (
+            path TEXT PRIMARY KEY,
+            priority INTEGER
+        )
+        """
         with self.lock: 
-            self.conn.execute(query)
+            self.conn.execute(query_files)
+            self.conn.execute(query_roots)
             self.conn.commit()
+
+    def save_roots(self, folder_list):
+        """Saves the list of folders and priorities to the DB."""
+        with self.lock:
+            # Clear old roots to ensure sync
+            self.conn.execute("DELETE FROM scan_roots")
+            for item in folder_list:
+                # Handle both dict (new format) and str (legacy)
+                path = item['path'] if isinstance(item, dict) else item
+                prio = item['priority'] if isinstance(item, dict) else 10
+                self.conn.execute("INSERT OR REPLACE INTO scan_roots (path, priority) VALUES (?, ?)", (path, prio))
+            self.conn.commit()
+
+    def get_roots(self):
+        """Retrieves the list of folders from the DB."""
+        with self.lock:
+            try:
+                cursor = self.conn.execute("SELECT path, priority FROM scan_roots")
+                return [{'path': row[0], 'priority': row[1]} for row in cursor.fetchall()]
+            except sqlite3.OperationalError:
+                return [] # Table might not exist in old DBs
 
     def get_file_record(self, path):
         with self.lock:
@@ -90,7 +120,7 @@ class Scanner:
         try:
             hasher = hashlib.md5()
             with open(filepath, 'rb') as f:
-                for chunk in iter(lambda: f.read(65536), b""): # Increased chunk size for speed
+                for chunk in iter(lambda: f.read(65536), b""): 
                     hasher.update(chunk)
             return hasher.hexdigest()
         except Exception:
@@ -102,12 +132,10 @@ class Scanner:
             if ext in IMAGE_EXTS:
                 img = Image.open(filepath)
             elif ext in VIDEO_EXTS:
-                # Wrap video capture in generic try/except to prevent console spam
                 try:
                     cap = cv2.VideoCapture(filepath)
                     if cap.isOpened():
                         total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-                        # Safety check for empty/corrupt video containers
                         if total > 0:
                             cap.set(cv2.CAP_PROP_POS_FRAMES, total // 2)
                             ret, frame = cap.read()
@@ -140,9 +168,7 @@ class Scanner:
         try:
             filepath = os.path.abspath(os.path.normpath(filepath))
             
-            # FIX 2: Check existence immediately to prevent ghosts
-            if not os.path.exists(filepath):
-                return False
+            if not os.path.exists(filepath): return False
 
             stats = os.stat(filepath)
             size = stats.st_size
@@ -160,7 +186,7 @@ class Scanner:
 
             existing = self.db.get_file_record(filepath)
             if existing and round(existing[0], 2) == round(mtime, 2): 
-                return True # Skipped (Already Indexed)
+                return True 
 
             exact_hash = self.generate_exact_hash(filepath)
             visual_hash = None
@@ -171,26 +197,26 @@ class Scanner:
 
             data = (filepath, filename, ext, size, mtime, ctime, exact_hash, visual_hash, audio_hash, datetime.now().isoformat())
             self.db.upsert_file(data)
-            return True # Processed successfully
+            return True 
             
         except Exception:
-            return False # Error
+            return False 
 
     def scan_directory(self, folder_list, db_path, stop_signal=None, progress_callback=None):
-        """
-        progress_callback: function(current, total, skipped_count)
-        """
         print(f"--- Starting Scan ---")
         self.db = DatabaseManager(db_path)
+        
+        # Save roots for future sessions
+        self.db.save_roots(folder_list)
+        
         files_to_process = []
         
         # Phase 1: Indexing
         for root_dir in folder_list:
             if stop_signal and stop_signal(): break
-            # Handle dict objects from new priority system or plain strings
             path_str = root_dir['path'] if isinstance(root_dir, dict) else root_dir
-            
             path_str = os.path.abspath(os.path.normpath(path_str))
+            
             for root, dirs, files in os.walk(path_str):
                 if stop_signal and stop_signal(): break
                 for file in files:
@@ -205,29 +231,21 @@ class Scanner:
         skipped_count = 0
         
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-            # We map futures to filepaths so we can track progress
             future_to_file = {executor.submit(self.process_file, fp): fp for fp in files_to_process}
             
             for future in concurrent.futures.as_completed(future_to_file):
                 if stop_signal and stop_signal(): break
-                
                 try:
                     success = future.result()
-                    if not success:
-                        skipped_count += 1
+                    if not success: skipped_count += 1
                 except Exception:
                     skipped_count += 1
                 
                 processed_count += 1
-                
-                # Report Progress back to UI
                 if progress_callback and processed_count % 10 == 0:
                     progress_callback(processed_count, total_files, skipped_count)
 
         self.db.close()
-        
-        if stop_signal and stop_signal():
-            return None
-            
+        if stop_signal and stop_signal(): return None
         print("--- Scan Complete ---")
         return db_path
