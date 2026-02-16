@@ -6,6 +6,11 @@ from difflib import SequenceMatcher
 # --- CONFIGURATION ---
 SIMILARITY_THRESHOLD = 70.0 
 
+# Must match Scanner Engine extensions
+VISUAL_EXTS = {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp', '.tiff', '.tif', '.psd', '.raw',
+               '.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.m4v', '.webm', '.ts', '.mts', '.3gp'}
+AUDIO_EXTS = {'.mp3', '.wav', '.flac', '.m4a', '.aac', '.ogg', '.wma'}
+
 class Matcher:
     def __init__(self, db_path):
         if not os.path.exists(db_path):
@@ -20,34 +25,49 @@ class Matcher:
 
     def fetch_all_files(self):
         cursor = self.conn.execute("SELECT * FROM files")
-        return [dict(row) for row in cursor.fetchall()]
+        # Ensure we only process files that exist on disk
+        valid_files = []
+        for row in cursor.fetchall():
+            d = dict(row)
+            if os.path.exists(d['path']):
+                valid_files.append(d)
+        return valid_files
 
     def find_exact_duplicates(self):
-        query = """
-        SELECT exact_hash, COUNT(*) as count 
-        FROM files 
-        WHERE exact_hash IS NOT NULL 
-        GROUP BY exact_hash 
-        HAVING count > 1
-        """
-        cursor = self.conn.execute(query)
+        all_files = self.fetch_all_files()
+        hash_map = {}
+        for f in all_files:
+            if f['exact_hash']:
+                if f['exact_hash'] not in hash_map:
+                    hash_map[f['exact_hash']] = []
+                hash_map[f['exact_hash']].append(f)
+        
         exact_groups = []
-        for row in cursor.fetchall():
-            file_hash = row['exact_hash']
-            files_cursor = self.conn.execute("SELECT path, filename FROM files WHERE exact_hash = ?", (file_hash,))
-            exact_groups.append([dict(f) for f in files_cursor.fetchall()])
+        for k, group in hash_map.items():
+            if len(group) > 1:
+                exact_groups.append(group)
         return exact_groups
 
     def calculate_score(self, f1, f2):
+        # Safety Check: If both are visual, we MUST share visual hashes.
+        # If one fails visual hashing (corrupt/empty), we cannot fallback to Name/Size
+        # because that generates 19k matches for "Sequence01.mp4" vs "Sequence02.mp4"
+        is_visual = f1['extension'] in VISUAL_EXTS
+        has_visual_hashes = f1['visual_hash'] and f2['visual_hash']
+        
+        if is_visual and not has_visual_hashes:
+            return 0 # Penalize missing hash for visual media
+
         score = 0
         total_weight = 0
 
         # 1. Visual Hash (60%)
-        if f1['visual_hash'] and f2['visual_hash']:
+        if has_visual_hashes:
             try:
                 h1 = imagehash.hex_to_hash(f1['visual_hash'])
                 h2 = imagehash.hex_to_hash(f2['visual_hash'])
                 dist = h1 - h2
+                # Normalized: 0 dist = 100%, 64 dist = 0%
                 sim = max(0, (64 - dist) / 64) * 100
                 score += sim * 0.60
                 total_weight += 0.60
@@ -66,38 +86,27 @@ class Matcher:
             score += size_sim * 0.10
             total_weight += 0.10
 
-        # 4. Audio Hash (Optional - 60% if visual is missing)
+        # 4. Audio Hash (Optional - 60% only if visual wasn't used)
         if f1['audio_hash'] and f2['audio_hash'] and total_weight < 0.5:
-             # Simple exact check for now, can be improved to hamming later
              if f1['audio_hash'] == f2['audio_hash']:
                  score += 100 * 0.60
-             else:
-                 score += 0
              total_weight += 0.60
 
         if total_weight == 0: return 0
         return round(score / total_weight, 1)
 
-    # UPDATED: Added progress_callback
     def find_fuzzy_matches(self, stop_signal=None, progress_callback=None):
         files = self.fetch_all_files()
         potential_matches = []
         n = len(files)
         
-        # Calculate total comparisons for progress bar: (n * (n-1)) / 2
         total_comparisons = (n * (n - 1)) // 2
         current_comparison = 0
-        
-        # Optimization: Pre-sort or filter to reduce checks if needed, 
-        # but for now we run full N^2 with progress updates.
         
         for i in range(n):
             if stop_signal and stop_signal(): break
             
-            # Optimization: Batch update progress to avoid UI flooding
-            if progress_callback and i % 5 == 0:
-                # Roughly estimate progress based on outer loop to save math
-                # or use precise counter
+            if progress_callback and i % 10 == 0:
                 progress_callback(current_comparison, total_comparisons)
 
             for j in range(i + 1, n):
@@ -105,13 +114,12 @@ class Matcher:
                 
                 f1, f2 = files[i], files[j]
                 
-                # OPTIMIZATION: Quick Type Check
-                is_aud_1 = f1['extension'] in {'.mp3','.wav','.flac','.m4a','.wma'}
-                is_aud_2 = f2['extension'] in {'.mp3','.wav','.flac','.m4a','.wma'}
-                is_vis_1 = f1['extension'] in {'.jpg','.png','.mp4','.avi','.m4v','.mov'}
-                is_vis_2 = f2['extension'] in {'.jpg','.png','.mp4','.avi','.m4v','.mov'}
+                # Basic Type Check
+                is_aud_1 = f1['extension'] in AUDIO_EXTS
+                is_aud_2 = f2['extension'] in AUDIO_EXTS
+                is_vis_1 = f1['extension'] in VISUAL_EXTS
+                is_vis_2 = f2['extension'] in VISUAL_EXTS
 
-                # Skip if types differ drastically (Audio vs Image)
                 if (is_aud_1 != is_aud_2) and (f1['filename'] != f2['filename']): continue
                 if (is_vis_1 != is_vis_2) and (f1['filename'] != f2['filename']): continue
 

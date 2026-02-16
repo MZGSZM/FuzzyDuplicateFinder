@@ -13,7 +13,7 @@ import numpy as np
 # Suppress OpenCV console spam
 os.environ["OPENCV_LOG_LEVEL"] = "OFF"
 
-# FIX 1: Allow massive images (AI upscales) without crashing
+# FIX: Allow massive images (AI upscales) without crashing
 Image.MAX_IMAGE_PIXELS = None
 
 try:
@@ -22,7 +22,8 @@ try:
 except ImportError:
     AUDIO_AVAILABLE = False
 
-IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp', '.tiff'}
+# GLOBAL CONFIG - These must match matcher.py logic
+IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp', '.tiff', '.tif', '.psd', '.raw'}
 VIDEO_EXTS = {'.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.m4v', '.webm', '.ts', '.mts', '.3gp'}
 AUDIO_EXTS = {'.mp3', '.wav', '.flac', '.m4a', '.aac', '.ogg', '.wma'}
 TEXT_EXTS = {'.txt', '.md', '.py', '.js', '.json', '.html', '.css', '.c', '.cpp'}
@@ -36,7 +37,6 @@ class DatabaseManager:
         self.create_table()
 
     def create_table(self):
-        # Table for Files
         query_files = """
         CREATE TABLE IF NOT EXISTS files (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -52,7 +52,6 @@ class DatabaseManager:
             scan_date TEXT
         )
         """
-        # Table for storing the Scan Roots (Folders & Priorities)
         query_roots = """
         CREATE TABLE IF NOT EXISTS scan_roots (
             path TEXT PRIMARY KEY,
@@ -65,25 +64,21 @@ class DatabaseManager:
             self.conn.commit()
 
     def save_roots(self, folder_list):
-        """Saves the list of folders and priorities to the DB."""
         with self.lock:
-            # Clear old roots to ensure sync
             self.conn.execute("DELETE FROM scan_roots")
             for item in folder_list:
-                # Handle both dict (new format) and str (legacy)
                 path = item['path'] if isinstance(item, dict) else item
                 prio = item['priority'] if isinstance(item, dict) else 10
                 self.conn.execute("INSERT OR REPLACE INTO scan_roots (path, priority) VALUES (?, ?)", (path, prio))
             self.conn.commit()
 
     def get_roots(self):
-        """Retrieves the list of folders from the DB."""
         with self.lock:
             try:
                 cursor = self.conn.execute("SELECT path, priority FROM scan_roots")
                 return [{'path': row[0], 'priority': row[1]} for row in cursor.fetchall()]
             except sqlite3.OperationalError:
-                return [] # Table might not exist in old DBs
+                return [] 
 
     def get_file_record(self, path):
         with self.lock:
@@ -107,10 +102,8 @@ class DatabaseManager:
             print(f"DB Write Error: {e}")
 
     def close(self):
-        try:
-            self.conn.close()
-        except:
-            pass
+        try: self.conn.close()
+        except: pass
 
 class Scanner:
     def __init__(self):
@@ -142,12 +135,10 @@ class Scanner:
                             if ret:
                                 img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
                     cap.release()
-                except Exception:
-                    pass
+                except: pass
             
             if img: return str(imagehash.phash(img))
-        except Exception:
-            pass
+        except: pass
         return None
 
     def generate_audio_hash(self, filepath):
@@ -161,13 +152,11 @@ class Scanner:
                 chroma_mean = np.mean(chroma, axis=1)
                 fingerprint = ",".join([str(round(x, 1)) for x in chroma_mean])
                 return hashlib.md5(fingerprint.encode()).hexdigest()
-        except Exception:
-            return None
+        except: return None
 
     def process_file(self, filepath):
         try:
             filepath = os.path.abspath(os.path.normpath(filepath))
-            
             if not os.path.exists(filepath): return False
 
             stats = os.stat(filepath)
@@ -198,20 +187,14 @@ class Scanner:
             data = (filepath, filename, ext, size, mtime, ctime, exact_hash, visual_hash, audio_hash, datetime.now().isoformat())
             self.db.upsert_file(data)
             return True 
-            
-        except Exception:
-            return False 
+        except: return False 
 
     def scan_directory(self, folder_list, db_path, stop_signal=None, progress_callback=None):
         print(f"--- Starting Scan ---")
         self.db = DatabaseManager(db_path)
-        
-        # Save roots for future sessions
         self.db.save_roots(folder_list)
         
         files_to_process = []
-        
-        # Phase 1: Indexing
         for root_dir in folder_list:
             if stop_signal and stop_signal(): break
             path_str = root_dir['path'] if isinstance(root_dir, dict) else root_dir
@@ -226,7 +209,6 @@ class Scanner:
         total_files = len(files_to_process)
         print(f"Found {total_files} files. Processing...")
         
-        # Phase 2: Processing
         processed_count = 0
         skipped_count = 0
         
@@ -238,8 +220,7 @@ class Scanner:
                 try:
                     success = future.result()
                     if not success: skipped_count += 1
-                except Exception:
-                    skipped_count += 1
+                except: skipped_count += 1
                 
                 processed_count += 1
                 if progress_callback and processed_count % 10 == 0:
