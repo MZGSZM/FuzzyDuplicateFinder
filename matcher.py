@@ -50,47 +50,55 @@ class Matcher:
 
     def calculate_score(self, f1, f2):
         # Safety Check: If both are visual, we MUST share visual hashes.
-        # If one fails visual hashing (corrupt/empty), we cannot fallback to Name/Size
-        # because that generates 19k matches for "Sequence01.mp4" vs "Sequence02.mp4"
         is_visual = f1['extension'] in VISUAL_EXTS
         has_visual_hashes = f1['visual_hash'] and f2['visual_hash']
         
+        # New Feature retained: Fail immediately if visual hashes are missing for visual files
         if is_visual and not has_visual_hashes:
-            return 0 # Penalize missing hash for visual media
+            return 0 
 
         score = 0
         total_weight = 0
 
-        # 1. Visual Hash (60%)
+        # 1. Visual Hash (50% - Reverted to strict threshold)
         if has_visual_hashes:
             try:
                 h1 = imagehash.hex_to_hash(f1['visual_hash'])
                 h2 = imagehash.hex_to_hash(f2['visual_hash'])
                 dist = h1 - h2
-                # Normalized: 0 dist = 100%, 64 dist = 0%
-                sim = max(0, (64 - dist) / 64) * 100
-                score += sim * 0.60
-                total_weight += 0.60
+                
+                # FIX: Reverted to old math. 
+                # Old logic: distance > 10 is 0% match.
+                # Broken logic was: (64 - dist) / 64, which gave 50% match for random images.
+                sim = max(0, (10 - dist) / 10) * 100
+                
+                score += sim * 0.50
+                total_weight += 0.50
             except: pass
 
-        # 2. Filename Similarity (20%)
+        # 2. Audio Hash (50% - Reverted weight)
+        if f1['audio_hash'] and f2['audio_hash']:
+             if f1['audio_hash'] == f2['audio_hash']:
+                 score += 100 * 0.50
+             total_weight += 0.50
+
+        # 3. Filename Similarity (20%)
         if f1['filename'] and f2['filename']:
             name_sim = SequenceMatcher(None, f1['filename'], f2['filename']).ratio() * 100
             score += name_sim * 0.20
             total_weight += 0.20
         
-        # 3. Size Similarity (10%)
+        # 4. Size Similarity (10%)
         size_a, size_b = f1['size'], f2['size']
         if size_a > 0 and size_b > 0:
             size_sim = (1 - (abs(size_a - size_b) / max(size_a, size_b))) * 100
             score += size_sim * 0.10
             total_weight += 0.10
 
-        # 4. Audio Hash (Optional - 60% only if visual wasn't used)
-        if f1['audio_hash'] and f2['audio_hash'] and total_weight < 0.5:
-             if f1['audio_hash'] == f2['audio_hash']:
-                 score += 100 * 0.60
-             total_weight += 0.60
+        # 5. Extension (5% - Restored from old version)
+        if f1['extension'] == f2['extension']:
+            score += 100 * 0.05
+            total_weight += 0.05
 
         if total_weight == 0: return 0
         return round(score / total_weight, 1)
