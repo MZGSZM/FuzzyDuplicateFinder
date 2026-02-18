@@ -1,4 +1,14 @@
 # -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_submodules, collect_data_files
+from PyInstaller.building.api import EXE, PYZ, Analysis, COLLECT
+from PyInstaller.building.datastruct import Tree, TOC
+import sys
+
+# Platform detection
+is_macos = sys.platform == 'darwin'
+is_windows = sys.platform == 'win32'
+is_linux = sys.platform.startswith('linux')
+
 a = Analysis(
     ['main.py'],
     pathex=[],
