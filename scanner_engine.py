@@ -32,7 +32,7 @@ class DatabaseManager:
     def __init__(self, db_path):
         self.db_path = db_path
         self.lock = threading.Lock()
-        self.conn = sqlite3.connect(db_path, timeout=30, check_same_thread=False, isolation_level=None)
+        self.conn = sqlite3.connect(db_path, timeout=30, check_same_thread=False)
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.create_table()
 
@@ -75,10 +75,22 @@ class DatabaseManager:
     def get_roots(self):
         with self.lock:
             try:
-                cursor = self.conn.execute("SELECT path, priority FROM scan_roots")
+                cursor = self.conn.execute("SELECT path, priority FROM scan_roots ORDER BY path")
                 return [{'path': row[0], 'priority': row[1]} for row in cursor.fetchall()]
             except sqlite3.OperationalError:
-                return [] 
+                # Table doesn't exist, create it and return empty list
+                try:
+                    query_roots = """
+                    CREATE TABLE IF NOT EXISTS scan_roots (
+                        path TEXT PRIMARY KEY,
+                        priority INTEGER
+                    )
+                    """
+                    self.conn.execute(query_roots)
+                    self.conn.commit()
+                except:
+                    pass
+                return []
 
     def get_file_record(self, path):
         with self.lock:

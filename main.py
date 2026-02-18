@@ -156,6 +156,49 @@ class ScanAndMatchWorker(QThread):
         except Exception as e:
             if not self.is_stopped(): self.error.emit(str(e))
 
+class AutoPruneWorker(QThread):
+    progress_update = pyqtSignal(str)
+    progress_value = pyqtSignal(int, int)  # current, total
+    finished = pyqtSignal(int)  # deleted count
+    error = pyqtSignal(str)
+    aborted = pyqtSignal()
+
+    def __init__(self, files_to_trash):
+        super().__init__()
+        self.files_to_trash = list(files_to_trash)
+        self._is_running = True
+
+    def stop(self):
+        self._is_running = False
+
+    def is_stopped(self):
+        return not self._is_running
+
+    def run(self):
+        try:
+            deleted_count = 0
+            total = len(self.files_to_trash)
+            
+            for i, filepath in enumerate(self.files_to_trash):
+                if self.is_stopped():
+                    self.aborted.emit()
+                    return
+                
+                try:
+                    if os.path.exists(filepath):
+                        send2trash(filepath)
+                        deleted_count += 1
+                except Exception as e:
+                    print(f"Failed to delete {filepath}: {e}")
+                
+                self.progress_value.emit(i + 1, total)
+                self.progress_update.emit(f"Pruning: {i + 1} / {total} files deleted")
+            
+            self.finished.emit(deleted_count)
+        except Exception as e:
+            if not self.is_stopped():
+                self.error.emit(str(e))
+
 class DuplicateFinderApp(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -412,7 +455,7 @@ class DuplicateFinderApp(QMainWindow):
             db.close()
             if roots:
                 self.scan_folders = roots
-                self.refresh_folder_table()
+                self.refresh_folder_table()  # This refreshes the UI with loaded priorities
             self.start_worker(skip_scan=True)
 
     def refresh_folder_table(self):
@@ -469,26 +512,43 @@ class DuplicateFinderApp(QMainWindow):
                 QPushButton:pressed { background-color: #1976d2; }
             """)
             
-            def on_up_clicked(idx=i, label=lbl_value):
-                if idx < len(self.scan_folders):
-                    new_val = min(100, self.scan_folders[idx]['priority'] + 1)
-                    self.scan_folders[idx]['priority'] = new_val
-                    label.setText(str(new_val))
-
-            def on_down_clicked(idx=i, label=lbl_value):
-                if idx < len(self.scan_folders):
-                    new_val = max(0, self.scan_folders[idx]['priority'] - 1)
-                    self.scan_folders[idx]['priority'] = new_val
-                    label.setText(str(new_val))
-
-            btn_up.clicked.connect(on_up_clicked)
-            btn_down.clicked.connect(on_down_clicked)
+            # FIX: Store index and label in button properties
+            btn_up.folder_index = i
+            btn_up.priority_label = lbl_value
+            btn_down.folder_index = i
+            btn_down.priority_label = lbl_value
+            
+            # Connect to methods that read the stored properties
+            btn_up.clicked.connect(self._on_priority_up_clicked)
+            btn_down.clicked.connect(self._on_priority_down_clicked)
             
             priority_layout.addWidget(btn_down)
             priority_layout.addWidget(lbl_value)
             priority_layout.addWidget(btn_up)
             
             self.folder_table.setCellWidget(i, 1, priority_widget)
+
+    def _on_priority_up_clicked(self):
+        """Helper method for up button click"""
+        btn = self.sender()
+        idx = btn.folder_index
+        label = btn.priority_label
+        if idx < len(self.scan_folders):
+            new_val = min(100, self.scan_folders[idx]['priority'] + 1)
+            self.scan_folders[idx]['priority'] = new_val
+            label.setText(str(new_val))
+            self.persist_folder_priorities()
+
+    def _on_priority_down_clicked(self):
+        """Helper method for down button click"""
+        btn = self.sender()
+        idx = btn.folder_index
+        label = btn.priority_label
+        if idx < len(self.scan_folders):
+            new_val = max(0, self.scan_folders[idx]['priority'] - 1)
+            self.scan_folders[idx]['priority'] = new_val
+            label.setText(str(new_val))
+            self.persist_folder_priorities()
 
     def update_priority(self, index, value):
         if 0 <= index < len(self.scan_folders):
@@ -697,38 +757,33 @@ class DuplicateFinderApp(QMainWindow):
         if not exact_matches:
             QMessageBox.information(self, "Auto-Prune", "No exact duplicates found.")
             return
-        files_to_trash = set()
-        count = 0
-        for m in exact_matches:
-            path_a = m['file_a']
-            path_b = m['file_b']
-            prio_a = self.get_folder_priority(path_a)
-            prio_b = self.get_folder_priority(path_b)
-            loser = None
-            if prio_a > prio_b: loser = path_b 
-            elif prio_b > prio_a: loser = path_a 
-            else:
-                if len(path_a) <= len(path_b): loser = path_b
-                else: loser = path_a
-            if loser and loser not in files_to_trash:
-                files_to_trash.add(loser)
-                count += 1
-        if count == 0: return
-        msg = f"Found {count} exact duplicate files to remove.\nStrategy: Lower Priority Folders first, then Longer Paths.\nMove to Trash?"
-        confirm = QMessageBox.question(self, "Auto-Prune", msg, QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        if confirm == QMessageBox.StandardButton.Yes:
-            deleted_count = 0
-            for filepath in files_to_trash:
-                try:
-                    if os.path.exists(filepath):
-                        send2trash(filepath)
-                        deleted_count += 1
-                except Exception as e:
-                    print(f"Failed to delete {filepath}: {e}")
-            QMessageBox.information(self, "Complete", f"Moved {deleted_count} files to Trash.")
-            self.match_list.clear()
-            self.matches = []
-            self.lbl_status.setText("Pruning complete. Please re-scan.")
+    
+    def on_prune_complete(self, deleted_count):
+        """Called when auto-prune finishes"""
+        self.progress_bar.hide()
+        self.btn_scan.setEnabled(True)
+        self.btn_stop.setEnabled(False)
+        QMessageBox.information(self, "Complete", f"Moved {deleted_count} files to Trash.")
+        self.match_list.clear()
+        self.matches = []
+        self.lbl_status.setText("Pruning complete. Please re-scan.")
+
+    def on_prune_aborted(self):
+        """Called when auto-prune is aborted"""
+        self.progress_bar.hide()
+        self.btn_scan.setEnabled(True)
+        self.btn_stop.setEnabled(False)
+        self.lbl_status.setText("Pruning aborted.")
+
+    def persist_folder_priorities(self):
+        """Save folder priorities to the current database"""
+        if self.current_db_path:
+            try:
+                db = DatabaseManager(self.current_db_path)
+                db.save_roots(self.scan_folders)
+                db.close()
+            except Exception as e:
+                print(f"Failed to save priorities: {e}")
 
     def resizeEvent(self, event):
         if self.current_match_index != -1:
@@ -744,6 +799,14 @@ class DuplicateFinderApp(QMainWindow):
             self.worker.stop()
             start = time.time()
             while self.worker.isRunning() and (time.time() - start) < 5.0:
+                QApplication.processEvents()
+                time.sleep(0.05)
+
+        # Handle prune worker if running
+        if hasattr(self, 'prune_worker') and self.prune_worker and self.prune_worker.isRunning():
+            self.prune_worker.stop()
+            start = time.time()
+            while self.prune_worker.isRunning() and (time.time() - start) < 5.0:
                 QApplication.processEvents()
                 time.sleep(0.05)
 
