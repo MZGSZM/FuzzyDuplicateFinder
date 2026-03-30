@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QListWidget, QListWidgetItem, QSplitter, QMessageBox, 
                              QProgressBar, QFrame, QSizePolicy, QMenu, QTableWidget, 
                              QTableWidgetItem, QHeaderView, QAbstractItemView, QSpinBox,
-                             QDialog, QTextEdit)
+                             QDialog, QTextEdit, QProgressDialog)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QPixmap, QImage, QAction
 from send2trash import send2trash
@@ -211,6 +211,8 @@ class DuplicateFinderApp(QMainWindow):
         self.current_match_index = -1
         self.current_db_path = None
         self.worker = None
+        self.prune_worker = None
+        self.prune_progress_dialog = None
         self.pixmap_cache = {'A': None, 'B': None}
 
         # --- MENU BAR ---
@@ -353,6 +355,10 @@ class DuplicateFinderApp(QMainWindow):
         btn_del_a.clicked.connect(lambda: self.delete_file("A"))
         self.style_button(btn_del_a, bg="#d32f2f")
         
+        btn_del_both = QPushButton("Delete Both Files")
+        btn_del_both.clicked.connect(self.delete_both_files)
+        self.style_button(btn_del_both, bg="#d32f2f")
+
         btn_keep = QPushButton("Skip / Keep Both")
         btn_keep.clicked.connect(self.next_match)
         self.style_button(btn_keep, bg="#555")
@@ -363,6 +369,8 @@ class DuplicateFinderApp(QMainWindow):
 
         action_layout.addStretch()
         action_layout.addWidget(btn_del_a)
+        action_layout.addSpacing(20)
+        action_layout.addWidget(btn_del_both)
         action_layout.addSpacing(20)
         action_layout.addWidget(self.lbl_score)
         action_layout.addWidget(btn_keep)
@@ -725,16 +733,46 @@ class DuplicateFinderApp(QMainWindow):
     def delete_file(self, target):
         if self.current_match_index == -1: return
         panel = self.panel_a if target == "A" else self.panel_b
-        filepath = panel['filepath']
+        filepath = panel.get('filepath')
+        if not filepath:
+            QMessageBox.warning(self, "Error", "No file selected")
+            return
+
         confirm = QMessageBox.question(self, "Confirm Delete", f"Send to Trash?\n\n{filepath}", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if confirm == QMessageBox.StandardButton.Yes:
             try:
-                send2trash(filepath)
+                if os.path.exists(filepath):
+                    send2trash(filepath)
                 self.lbl_status.setText(f"Deleted {os.path.basename(filepath)}")
                 self.next_match()
                 self.match_list.setFocus()
             except Exception as e:
                 QMessageBox.critical(self, "Error", str(e))
+
+    def delete_both_files(self):
+        if self.current_match_index == -1: return
+        path_a = self.panel_a.get('filepath')
+        path_b = self.panel_b.get('filepath')
+        if not path_a or not path_b:
+            QMessageBox.warning(self, "Error", "Both File A and File B must be available to delete both.")
+            return
+
+        confirm = QMessageBox.question(self, "Confirm Delete Both", f"Send both files to Trash?\n\n{path_a}\n{path_b}", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        deleted = 0
+        for p in (path_a, path_b):
+            try:
+                if os.path.exists(p):
+                    send2trash(p)
+                    deleted += 1
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to delete {p}: {e}")
+
+        self.lbl_status.setText(f"Deleted {deleted} file(s)")
+        self.next_match()
+        self.match_list.setFocus()
 
     def next_match(self):
         current_row = self.match_list.currentRow()
@@ -753,13 +791,88 @@ class DuplicateFinderApp(QMainWindow):
         return 0
 
     def auto_prune_exact(self):
-        exact_matches = [m for m in self.matches if m['type'] == 'EXACT']
+        if self.worker and self.worker.isRunning():
+            QMessageBox.warning(self, "Auto-Prune", "Cannot prune while scan is in progress.")
+            return
+
+        exact_matches = [m for m in self.matches if m.get('type') == 'EXACT']
         if not exact_matches:
             QMessageBox.information(self, "Auto-Prune", "No exact duplicates found.")
             return
-    
+
+        confirm = QMessageBox.question(
+            self,
+            "Auto-Prune Exact Duplicates",
+            f"This will move {len(exact_matches)} duplicate file(s) to Trash. Continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        # Delete one duplicate per exact pair (keep highest-priority source)
+        files_to_delete = []
+        seen = set()
+        for match in exact_matches:
+            a = match.get('file_a')
+            b = match.get('file_b')
+            if not a or not b:
+                continue
+
+            prio_a = self.get_folder_priority(a)
+            prio_b = self.get_folder_priority(b)
+
+            # if equal, keep A and delete B (as generated by the matcher)
+            if prio_b > prio_a:
+                candidate = a
+            else:
+                candidate = b
+
+            if candidate and candidate not in seen:
+                seen.add(candidate)
+                files_to_delete.append(candidate)
+
+        if not files_to_delete:
+            QMessageBox.information(self, "Auto-Prune", "No eligible files found for pruning.")
+            return
+
+        self.progress_bar.setRange(0, 0)
+        self.progress_bar.show()
+        self.btn_scan.setEnabled(False)
+        self.btn_stop.setEnabled(False)
+
+        self.prune_progress_dialog = QProgressDialog("Pruning exact duplicates...", "Cancel", 0, len(files_to_delete), self)
+        self.prune_progress_dialog.setWindowTitle("Auto-Prune Exact Duplicates")
+        self.prune_progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        self.prune_progress_dialog.setAutoClose(False)
+        self.prune_progress_dialog.setAutoReset(False)
+        self.prune_progress_dialog.setMinimumDuration(100)
+        self.prune_progress_dialog.setValue(0)
+
+        self.prune_worker = AutoPruneWorker(files_to_delete)
+        self.prune_worker.progress_update.connect(lambda s: self.lbl_status.setText(s))
+        self.prune_worker.progress_value.connect(self.update_progress_bar)
+        self.prune_worker.progress_value.connect(lambda current, total: self._update_prune_progress(current, total))
+        self.prune_worker.finished.connect(self.on_prune_complete)
+        self.prune_worker.error.connect(self.on_error)
+        self.prune_worker.aborted.connect(self.on_prune_aborted)
+
+        self.prune_progress_dialog.canceled.connect(lambda: self.prune_worker.stop())
+        self.prune_worker.start()
+
+    def _update_prune_progress(self, current, total):
+        if self.prune_progress_dialog:
+            self.prune_progress_dialog.setMaximum(total)
+            self.prune_progress_dialog.setValue(current)
+            self.prune_progress_dialog.setLabelText(f"Pruning: {current} / {total} files")
+
+    def _close_prune_progress_dialog(self):
+        if self.prune_progress_dialog:
+            self.prune_progress_dialog.close()
+            self.prune_progress_dialog = None
+
     def on_prune_complete(self, deleted_count):
         """Called when auto-prune finishes"""
+        self._close_prune_progress_dialog()
         self.progress_bar.hide()
         self.btn_scan.setEnabled(True)
         self.btn_stop.setEnabled(False)
@@ -770,6 +883,7 @@ class DuplicateFinderApp(QMainWindow):
 
     def on_prune_aborted(self):
         """Called when auto-prune is aborted"""
+        self._close_prune_progress_dialog()
         self.progress_bar.hide()
         self.btn_scan.setEnabled(True)
         self.btn_stop.setEnabled(False)
