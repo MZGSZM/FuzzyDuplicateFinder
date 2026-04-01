@@ -13,11 +13,17 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QDialog, QTextEdit, QProgressDialog)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QPixmap, QImage, QAction
+from PyQt6.QtCore import QUrl
+from PyQt6.QtGui import QDesktopServices
 from send2trash import send2trash
 from PIL import Image
 
 from scanner_engine import Scanner, DatabaseManager
 from matcher import Matcher
+
+# --- VERSION INFO ---
+VERSION = "1.2.0"
+GITHUB_URL = "https://github.com/MZGSZM/FuzzyDuplicateFinder"
 
 def format_size(size_bytes):
     if size_bytes == 0: return "0 B"
@@ -227,6 +233,19 @@ class DuplicateFinderApp(QMainWindow):
         prune_exact_action.triggered.connect(self.auto_prune_exact)
         tools_menu.addAction(prune_exact_action)
 
+        # --- STATUS BAR ---
+        self.status_bar = self.statusBar()
+        self.lbl_status = QLabel("Ready")
+        self.lbl_status.setStyleSheet("color: #aaa; margin-left: 10px; font-weight: bold;")
+        self.status_bar.addWidget(self.lbl_status)
+        
+        # Version label (clickable)
+        self.lbl_version = QLabel(f"v{VERSION}")
+        self.lbl_version.setStyleSheet("color: #666; font-size: 10px; margin-right: 10px;")
+        self.lbl_version.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.lbl_version.mousePressEvent = lambda event: self.open_github()
+        self.status_bar.addPermanentWidget(self.lbl_version)
+
         # --- MAIN LAYOUT (VERTICAL SPLITTER) ---
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -265,9 +284,6 @@ class DuplicateFinderApp(QMainWindow):
         self.btn_stop.clicked.connect(self.stop_scan)
         self.style_button(self.btn_stop, bg="#d32f2f")
         
-        self.lbl_status = QLabel("Ready")
-        self.lbl_status.setStyleSheet("color: #aaa; margin-left: 10px; font-weight: bold;")
-        
         # New Skipped Files Button
         self.btn_skipped = QPushButton("0 Skipped")
         self.btn_skipped.setStyleSheet("""
@@ -284,7 +300,6 @@ class DuplicateFinderApp(QMainWindow):
         btn_row.addSpacing(20)
         btn_row.addWidget(self.btn_scan)
         btn_row.addWidget(self.btn_stop)
-        btn_row.addWidget(self.lbl_status)
         btn_row.addWidget(self.btn_skipped)
         btn_row.addStretch()
 
@@ -1030,6 +1045,10 @@ class DuplicateFinderApp(QMainWindow):
                                 time.sleep(0.1)
 
         event.accept()
+
+    def open_github(self):
+        """Open the project's GitHub page in the default browser"""
+        QDesktopServices.openUrl(QUrl(GITHUB_URL))
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
