@@ -1,10 +1,16 @@
 name: Build Executables
 
 on:
-  push:
-    branches: [ main, develop ]
-  pull_request:
-    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Reason for manual build'
+        required: false
+        default: 'Manual production build'
+  #push:
+    #branches: [ main, develop ]
+  #pull_request:
+    #branches: [ main ]
 
 jobs:
   build:
