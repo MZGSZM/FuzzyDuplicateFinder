@@ -10,7 +10,7 @@
 6. Shows details about the duplicates files including (but not limited to) size, location, and dimensions.
 
 ## Running the app
-1. Download the [latest release](./releases/latest) for your OS of choice in a compiled format (no dependencies need to be installed) or the loose .py files.
+1. Download the [latest release](/../../releases/latest) for your OS of choice in a compiled format (no dependencies need to be installed) or the loose .py files.
 2. For the compiled versions, it is as simple as running the binary. If using the loose files, you will need to refer to the requirements.txt file and install all of them with `python -m pip install -r requirements.txt`. Then simply run `python main.py`.
 
 ## A few additional notes:
