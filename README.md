@@ -21,7 +21,7 @@
 4. When a single folder is selected to scan, the database will be saved inside that folder as "duplicate_index.db". If multiple folders are selected, the program will prompt where you'd like to save it (custom names are supported).
 
 ## Screenshots
-![Main interface screenshit](/screens/main.png)
+![Main interface screenshot](/screens/main.png)
 ![Skipped files popup box screenshot](/screens/skipped.png)
 
 *Photos seen in sample screenshot sourced from [International-dish78](https://www.reddit.com/user/International-dish78/)'s [post](https://www.reddit.com/r/windows/comments/1kmpiox) on /r/windows.*
