@@ -225,21 +225,29 @@ class Matcher:
                 future = executor.submit(_compare_range, files, start, end, SIMILARITY_THRESHOLD)
                 futures_submitted.append((future, start, end))
 
-            for future, start, end in futures_submitted:
+            for future in concurrent.futures.as_completed(futures_submitted):
                 if stop_signal and stop_signal():
+                    # Cancel remaining futures
+                    for f, _, _ in futures_submitted:
+                        if not f.done():
+                            f.cancel()
                     break
                 
                 try:
-                    matches = future.result(timeout=30)
+                    matches = future.result(timeout=10)
                     potential_matches.extend(matches)
                 except concurrent.futures.CancelledError:
                     pass
                 except Exception:
                     pass
 
-                current_comparison += _pair_range_count(start, end, n)
-                if progress_callback:
-                    progress_callback(current_comparison, total_comparisons)
+                # Find the start, end for this future
+                for f, s, e in futures_submitted:
+                    if f == future:
+                        current_comparison += _pair_range_count(s, e, n)
+                        if progress_callback:
+                            progress_callback(current_comparison, total_comparisons)
+                        break
 
         finally:
             executor.shutdown(wait=False, cancel_futures=True)

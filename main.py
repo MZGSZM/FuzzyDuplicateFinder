@@ -144,6 +144,7 @@ class ScanAndMatchWorker(QThread):
             if self.is_stopped(): matcher.close(); self.aborted.emit(); return
             
             self.progress_update.emit("Finalizing matches...")
+            if self.is_stopped(): matcher.close(); self.aborted.emit(); return
             final_matches = []
             for group in exact:
                 base = group[0]
@@ -967,18 +968,12 @@ class DuplicateFinderApp(QMainWindow):
         # 1) Stop worker and wait (process events while waiting)
         if self.worker and self.worker.isRunning():
             self.worker.stop()
-            start = time.time()
-            while self.worker.isRunning() and (time.time() - start) < 5.0:
-                QApplication.processEvents()
-                time.sleep(0.05)
+            self.worker.wait(5000)
 
         # Handle prune worker if running
         if hasattr(self, 'prune_worker') and self.prune_worker and self.prune_worker.isRunning():
             self.prune_worker.stop()
-            start = time.time()
-            while self.prune_worker.isRunning() and (time.time() - start) < 5.0:
-                QApplication.processEvents()
-                time.sleep(0.05)
+            self.prune_worker.wait(5000)
 
         # 1.5) If you hold a DatabaseManager instance, close it here:
         try:
