@@ -21,7 +21,7 @@ from PIL import Image
 from scanner_engine import Scanner, DatabaseManager
 from matcher import Matcher
 
-# --- VERSION INFO ---
+# Version Info
 VERSION = "1.3.0"
 GITHUB_URL = "https://github.com/MZGSZM/FuzzyDuplicateFinder"
 
@@ -223,7 +223,7 @@ class DuplicateFinderApp(QMainWindow):
         self.prune_progress_dialog = None
         self.pixmap_cache = {'A': None, 'B': None}
 
-        # --- MENU BAR ---
+        # Menu Bar
         menubar = self.menuBar()
         file_menu = menubar.addMenu("File")
         exit_action = QAction("Exit", self)
@@ -235,7 +235,7 @@ class DuplicateFinderApp(QMainWindow):
         prune_exact_action.triggered.connect(self.auto_prune_exact)
         tools_menu.addAction(prune_exact_action)
 
-        # --- STATUS BAR ---
+        # Status Bar
         self.status_bar = self.statusBar()
         self.lbl_status = QLabel("Ready")
         self.lbl_status.setStyleSheet("color: #aaa; margin-left: 10px; font-weight: bold;")
@@ -248,7 +248,7 @@ class DuplicateFinderApp(QMainWindow):
         self.lbl_version.mousePressEvent = lambda event: self.open_github()
         self.status_bar.addPermanentWidget(self.lbl_version)
 
-        # --- MAIN LAYOUT (VERTICAL SPLITTER) ---
+        # Main Layout (Vertical Splitter)
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
@@ -257,7 +257,7 @@ class DuplicateFinderApp(QMainWindow):
         # Vertical Splitter: Top (Controls) vs Bottom (Comparisons)
         v_splitter = QSplitter(Qt.Orientation.Vertical)
         
-        # --- TOP PANEL ---
+        # Top Panel
         top_container = QWidget()
         top_layout = QVBoxLayout(top_container)
         top_layout.setContentsMargins(0, 0, 0, 0)
@@ -328,7 +328,7 @@ class DuplicateFinderApp(QMainWindow):
 
         v_splitter.addWidget(top_container)
 
-        # --- BOTTOM PANEL (Comparison) ---
+        # Bottom Panel (Comparison)
         bottom_container = QWidget()
         bottom_layout = QHBoxLayout(bottom_container)
         bottom_layout.setContentsMargins(0, 0, 0, 0)
@@ -428,7 +428,7 @@ class DuplicateFinderApp(QMainWindow):
         lbl_img.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lbl_img.setStyleSheet("background-color: #111; border: 1px solid #333; border-radius: 4px;")
         
-        # --- FIX FOR TINY IMAGES ---
+        # Fix for tiny images
         # Ignored + Stretch Factor 1 forces it to fill available space
         lbl_img.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         lbl_img.setScaledContents(False) 
@@ -453,8 +453,6 @@ class DuplicateFinderApp(QMainWindow):
         meta_layout.addWidget(lbl_filename); meta_layout.addWidget(lbl_path); meta_layout.addWidget(lbl_details); meta_layout.addWidget(lbl_dates); meta_layout.addWidget(btn_open)
         layout.addWidget(meta_frame)
         return {"container": container, "img": lbl_img, "filename": lbl_filename, "path": lbl_path, "details": lbl_details, "dates": lbl_dates, "btn_open": btn_open, "filepath": None}
-
-    # ... (Rest of the class methods remain the same: add_folder, start_scan, load_index, etc.) ...
     
     def add_folder(self):
         """Add folders with native multi-select when available"""
@@ -537,7 +535,7 @@ class DuplicateFinderApp(QMainWindow):
                 QPushButton:pressed { background-color: #1976d2; }
             """)
             
-            # FIX: Store index and label in button properties
+            # Store index and label in button properties
             btn_up.folder_index = i
             btn_up.priority_label = lbl_value
             btn_down.folder_index = i
@@ -714,7 +712,9 @@ class DuplicateFinderApp(QMainWindow):
         panel['path'].setText(os.path.dirname(filepath))
         try: panel['btn_open'].clicked.disconnect() 
         except: pass
-        panel['btn_open'].clicked.connect(lambda: os.startfile(filepath) if os.name == 'nt' else os.system(f"open '{filepath}'"))
+        
+        # Bind filepath to a default argument to lock its state and avoid garbage collection issues
+        panel['btn_open'].clicked.connect(lambda checked=False, p=filepath: os.startfile(p) if os.name == 'nt' else os.system(f"open '{p}'"))
 
         res_str = ""
         extra_str = ""
@@ -965,7 +965,7 @@ class DuplicateFinderApp(QMainWindow):
         super().resizeEvent(event)
 
     def closeEvent(self, event):
-        # 1) Stop worker and wait (process events while waiting)
+        # Stop worker and wait, process events while waiting
         if self.worker and self.worker.isRunning():
             self.worker.stop()
             self.worker.wait(5000)
@@ -975,15 +975,7 @@ class DuplicateFinderApp(QMainWindow):
             self.prune_worker.stop()
             self.prune_worker.wait(5000)
 
-        # 1.5) If you hold a DatabaseManager instance, close it here:
-        try:
-            if hasattr(self, "db") and self.db:
-                try:
-                    self.db.close()
-                except: pass
-        except: pass
-
-        # 2) Database cleanup prompt
+        # Database cleanup prompt
         if self.current_db_path:
             reply = QMessageBox.question(self, "Cleanup",
                                          "Delete the index database file before exiting?",
@@ -1035,7 +1027,6 @@ class DuplicateFinderApp(QMainWindow):
                                         print(f"Permanent delete failed: {e2}")
                                     break
                                 else:
-                                    # Skip
                                     break
                             else:
                                 time.sleep(0.1)

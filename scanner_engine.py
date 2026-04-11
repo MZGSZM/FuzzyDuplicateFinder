@@ -15,7 +15,7 @@ MAX_SCAN_WORKERS = min(16, max(4, (os.cpu_count() or 4) * 2))
 # Suppress OpenCV console spam
 os.environ["OPENCV_LOG_LEVEL"] = "OFF"
 
-# FIX: Allow massive images (AI upscales) without crashing
+# Allow massive images to load without crashing
 Image.MAX_IMAGE_PIXELS = None
 
 try:
@@ -24,7 +24,7 @@ try:
 except ImportError:
     AUDIO_AVAILABLE = False
 
-# GLOBAL CONFIG - These must match matcher.py logic
+# GLOBAL CONFIG: These must match matcher.py logic
 IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp', '.tiff', '.tif', '.psd', '.raw'}
 VIDEO_EXTS = {'.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.m4v', '.webm', '.ts', '.mts', '.3gp'}
 AUDIO_EXTS = {'.mp3', '.wav', '.flac', '.m4a', '.aac', '.ogg', '.wma'}
@@ -32,6 +32,7 @@ TEXT_EXTS = {'.txt', '.md', '.py', '.js', '.json', '.html', '.css', '.c', '.cpp'
 
 class DatabaseManager:
     def __init__(self, db_path):
+        # Initialize thread-safe database connection
         self.db_path = db_path
         self.lock = threading.Lock()
         self.conn = sqlite3.connect(db_path, timeout=30, check_same_thread=False)
@@ -39,6 +40,7 @@ class DatabaseManager:
         self.create_table()
 
     def create_table(self):
+        # Create necessary tables if they do not exist
         query_files = """
         CREATE TABLE IF NOT EXISTS files (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -66,6 +68,7 @@ class DatabaseManager:
             self.conn.commit()
 
     def save_roots(self, folder_list):
+        # Clear and save updated scan roots and their priorities
         with self.lock:
             self.conn.execute("DELETE FROM scan_roots")
             for item in folder_list:
@@ -75,12 +78,13 @@ class DatabaseManager:
             self.conn.commit()
 
     def get_roots(self):
+        # Retrieve saved scan roots
         with self.lock:
             try:
                 cursor = self.conn.execute("SELECT path, priority FROM scan_roots ORDER BY path")
                 return [{'path': row[0], 'priority': row[1]} for row in cursor.fetchall()]
             except sqlite3.OperationalError:
-                # Table doesn't exist, create it and return empty list
+                # Table does not exist, create it and return empty list
                 try:
                     query_roots = """
                     CREATE TABLE IF NOT EXISTS scan_roots (
@@ -95,11 +99,13 @@ class DatabaseManager:
                 return []
 
     def get_file_record(self, path):
+        # Fetch existing record to check if file needs rescan
         with self.lock:
             cursor = self.conn.execute("SELECT mtime, exact_hash, visual_hash, audio_hash FROM files WHERE path = ?", (path,))
             return cursor.fetchone()
 
     def upsert_file(self, data):
+        # Insert or update file record in the database
         query = """
         INSERT INTO files (path, filename, extension, size, mtime, ctime, exact_hash, visual_hash, audio_hash, scan_date)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -116,6 +122,7 @@ class DatabaseManager:
             print(f"DB Write Error: {e}")
 
     def close(self):
+        # Safely close connection
         try: self.conn.close()
         except: pass
 
@@ -124,6 +131,7 @@ class Scanner:
         self.db = None 
 
     def generate_exact_hash(self, filepath):
+        # Generate MD5 hash of the entire file
         try:
             hasher = hashlib.md5()
             with open(filepath, 'rb') as f:
@@ -134,6 +142,7 @@ class Scanner:
             return None
 
     def generate_visual_hash(self, filepath, ext):
+        # Generate perceptual hash for images and videos
         try:
             img = None
             if ext in IMAGE_EXTS:
@@ -156,6 +165,7 @@ class Scanner:
         return None
 
     def generate_audio_hash(self, filepath):
+        # Generate audio fingerprint using librosa
         if not AUDIO_AVAILABLE: return None
         try:
             import warnings
@@ -169,6 +179,7 @@ class Scanner:
         except: return None
 
     def process_file(self, filepath):
+        # Process a single file and store its hashes in the database
         try:
             filepath = os.path.abspath(os.path.normpath(filepath))
             if not os.path.exists(filepath): return False
@@ -197,7 +208,7 @@ class Scanner:
 
             if is_img or is_vid: 
                 visual_hash = self.generate_visual_hash(filepath, ext)
-                if visual_hash is None: # The file was "bad" and couldn't be hashed
+                if visual_hash is None: 
                     return False
             if is_aud: 
                 audio_hash = self.generate_audio_hash(filepath)
@@ -210,17 +221,17 @@ class Scanner:
         except: return False 
 
     def scan_directory(self, folder_list, db_path, stop_signal=None, progress_callback=None):
-        print(f"--- Starting Scan ---")
+        # Scan directories and dispatch worker threads for hashing
+        print("Starting Scan")
         self.db = DatabaseManager(db_path)
         self.db.save_roots(folder_list)
         
-        # FIX: Identify the files to ignore based on the active db_path
         db_filename = os.path.basename(db_path)
         ignored_files = {
             db_filename, 
             db_filename + "-shm", 
             db_filename + "-wal",
-            "duplicate_index.db" # Keep the default legacy ignore just in case
+            "duplicate_index.db"
         }
 
         files_to_process = []
@@ -232,7 +243,6 @@ class Scanner:
             for root, dirs, files in os.walk(path_str):
                 if stop_signal and stop_signal(): break
                 for file in files:
-                    # FIX: Check against the set of ignored DB files
                     if file in ignored_files: 
                         continue
                         
@@ -246,29 +256,41 @@ class Scanner:
         skipped_files_list = []
         
         worker_count = min(MAX_SCAN_WORKERS, max(1, (os.cpu_count() or 4) * 2))
-        with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
-            future_to_file = {executor.submit(self.process_file, fp): fp for fp in files_to_process}
-            
-            for future in concurrent.futures.as_completed(future_to_file):
-                filepath = future_to_file[future]
-                if stop_signal and stop_signal(): break
+        
+        # Manually initialize the executor to avoid the blocking context manager
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=worker_count)
+        future_to_file = {}
+        
+        try:
+            # Submit all tasks
+            for fp in files_to_process:
+                future_to_file[executor.submit(self.process_file, fp)] = fp
                 
+            for future in concurrent.futures.as_completed(future_to_file):
+                # If stopped, break out of the processing loop
+                if stop_signal and stop_signal(): 
+                    break
+                
+                filepath = future_to_file[future]
                 try:
                     success = future.result()
                     if not success: 
                         skipped_count += 1
                         skipped_files_list.append(filepath)
-                except: 
+                except Exception: 
                     skipped_count += 1
                     skipped_files_list.append(filepath)
                 
                 processed_count += 1
                 if progress_callback and processed_count % 10 == 0:
                     progress_callback(processed_count, total_files, skipped_count)
+        finally:
+            # Force immediate shutdown and cancel all pending file hashes
+            executor.shutdown(wait=False, cancel_futures=True)
 
         self.db.close()
         if stop_signal and stop_signal(): return None, []
-        print("--- Scan Complete ---")
+        print("Scan Complete")
         
         # Return tuple: (DB Path, Skipped List)
         return db_path, skipped_files_list

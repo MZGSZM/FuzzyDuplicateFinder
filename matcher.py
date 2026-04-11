@@ -4,7 +4,7 @@ import os
 import concurrent.futures
 from difflib import SequenceMatcher
 
-# --- CONFIGURATION ---
+# Configuration variables
 SIMILARITY_THRESHOLD = 70.0 
 MAX_MATCH_WORKERS = max(1, min(8, os.cpu_count() or 4))
 
@@ -13,20 +13,24 @@ VISUAL_EXTS = {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp', '.tiff', '.tif'
                '.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.m4v', '.webm', '.ts', '.mts', '.3gp'}
 AUDIO_EXTS = {'.mp3', '.wav', '.flac', '.m4a', '.aac', '.ogg', '.wma'}
 
-
 def _pair_range_count(start, end, n):
-    # Count comparisons for i in [start, end)
+    # Count comparisons for i in the range of start to end
     total = 0
     for i in range(start, end):
         total += max(0, n - i - 1)
     return total
 
-
-def _compare_range(files, start, end, similarity_threshold):
+def _compare_range(files, start, end, similarity_threshold, stop_signal=None):
+    # Compares a subset of files against the rest of the list.
+    # Includes a stop_signal check to exit immediately if the user aborts.
     matches = []
     n = len(files)
 
     for i in range(start, end):
+        # Abort if the user clicked stop
+        if stop_signal and stop_signal():
+            break
+            
         f1 = files[i]
         is_aud_1 = f1['extension'] in AUDIO_EXTS
         is_vis_1 = f1['extension'] in VISUAL_EXTS
@@ -51,18 +55,19 @@ def _compare_range(files, start, end, similarity_threshold):
 
     return matches
 
-
 def _calculate_score_local(f1, f2):
-    # Duplicate the same scoring logic as Matcher.calculate_score to keep worker functions pickle-safe.
+    # Calculates the similarity score between two file records.
     is_visual = f1['extension'] in VISUAL_EXTS
     has_visual_hashes = f1['visual_hash'] and f2['visual_hash']
 
+    # Fail immediately if visual hashes are missing for visual files
     if is_visual and not has_visual_hashes:
         return 0
 
     score = 0
     total_weight = 0
 
+    # 1. Visual Hash Comparison
     if has_visual_hashes:
         try:
             h1 = imagehash.hex_to_hash(f1['visual_hash'])
@@ -73,22 +78,26 @@ def _calculate_score_local(f1, f2):
             total_weight += 0.50
         except: pass
 
+    # 2. Audio Hash Comparison
     if f1['audio_hash'] and f2['audio_hash']:
         if f1['audio_hash'] == f2['audio_hash']:
             score += 100 * 0.50
         total_weight += 0.50
 
+    # 3. Filename Similarity
     if f1['filename'] and f2['filename']:
         name_sim = SequenceMatcher(None, f1['filename'], f2['filename']).ratio() * 100
         score += name_sim * 0.20
         total_weight += 0.20
 
+    # 4. Size Similarity
     size_a, size_b = f1['size'], f2['size']
     if size_a > 0 and size_b > 0:
         size_sim = (1 - (abs(size_a - size_b) / max(size_a, size_b))) * 100
         score += size_sim * 0.10
         total_weight += 0.10
 
+    # 5. Extension Match
     if f1['extension'] == f2['extension']:
         score += 100 * 0.05
         total_weight += 0.05
@@ -97,9 +106,9 @@ def _calculate_score_local(f1, f2):
         return 0
     return round(score / total_weight, 1)
 
-
 class Matcher:
     def __init__(self, db_path):
+        # Initialize the database connection
         if not os.path.exists(db_path):
             raise FileNotFoundError(f"Database not found at {db_path}")
         
@@ -107,12 +116,13 @@ class Matcher:
         self.conn.row_factory = sqlite3.Row 
 
     def close(self):
+        # Safely close the database connection
         try: self.conn.close()
         except: pass
 
     def fetch_all_files(self):
+        # Retrieve all file records that currently exist on disk
         cursor = self.conn.execute("SELECT * FROM files")
-        # Ensure we only process files that exist on disk
         valid_files = []
         for row in cursor.fetchall():
             d = dict(row)
@@ -121,6 +131,7 @@ class Matcher:
         return valid_files
 
     def find_exact_duplicates(self):
+        # Identify files with identical exact_hash values
         all_files = self.fetch_all_files()
         hash_map = {}
         for f in all_files:
@@ -135,62 +146,8 @@ class Matcher:
                 exact_groups.append(group)
         return exact_groups
 
-    def calculate_score(self, f1, f2):
-        # Safety Check: If both are visual, we MUST share visual hashes.
-        is_visual = f1['extension'] in VISUAL_EXTS
-        has_visual_hashes = f1['visual_hash'] and f2['visual_hash']
-        
-        # New Feature retained: Fail immediately if visual hashes are missing for visual files
-        if is_visual and not has_visual_hashes:
-            return 0 
-
-        score = 0
-        total_weight = 0
-
-        # 1. Visual Hash (50% - Reverted to strict threshold)
-        if has_visual_hashes:
-            try:
-                h1 = imagehash.hex_to_hash(f1['visual_hash'])
-                h2 = imagehash.hex_to_hash(f2['visual_hash'])
-                dist = h1 - h2
-                
-                # FIX: Reverted to old math. 
-                # Old logic: distance > 10 is 0% match.
-                # Broken logic was: (64 - dist) / 64, which gave 50% match for random images.
-                sim = max(0, (10 - dist) / 10) * 100
-                
-                score += sim * 0.50
-                total_weight += 0.50
-            except: pass
-
-        # 2. Audio Hash (50% - Reverted weight)
-        if f1['audio_hash'] and f2['audio_hash']:
-             if f1['audio_hash'] == f2['audio_hash']:
-                 score += 100 * 0.50
-             total_weight += 0.50
-
-        # 3. Filename Similarity (20%)
-        if f1['filename'] and f2['filename']:
-            name_sim = SequenceMatcher(None, f1['filename'], f2['filename']).ratio() * 100
-            score += name_sim * 0.20
-            total_weight += 0.20
-        
-        # 4. Size Similarity (10%)
-        size_a, size_b = f1['size'], f2['size']
-        if size_a > 0 and size_b > 0:
-            size_sim = (1 - (abs(size_a - size_b) / max(size_a, size_b))) * 100
-            score += size_sim * 0.10
-            total_weight += 0.10
-
-        # 5. Extension (5% - Restored from old version)
-        if f1['extension'] == f2['extension']:
-            score += 100 * 0.05
-            total_weight += 0.05
-
-        if total_weight == 0: return 0
-        return round(score / total_weight, 1)
-
     def find_fuzzy_matches(self, stop_signal=None, progress_callback=None):
+        # Execute multi-threaded fuzzy matching across all files
         files = self.fetch_all_files()
         potential_matches = []
         n = len(files)
@@ -203,7 +160,7 @@ class Matcher:
         current_comparison = 0
 
         worker_count = min(MAX_MATCH_WORKERS, max(1, n - 1))
-        # Smaller chunks = more frequent progress updates and better stop responsiveness
+        # Smaller chunks result in more frequent progress updates and better stop responsiveness
         chunk_size = max(1, n // (worker_count * 16))
         ranges = []
         start = 0
@@ -222,12 +179,13 @@ class Matcher:
                 if stop_signal and stop_signal():
                     break
                 
-                future = executor.submit(_compare_range, files, start, end, SIMILARITY_THRESHOLD)
+                # Pass the stop_signal into the worker function
+                future = executor.submit(_compare_range, files, start, end, SIMILARITY_THRESHOLD, stop_signal)
                 futures_submitted.append((future, start, end))
 
             for future in concurrent.futures.as_completed(futures_submitted):
                 if stop_signal and stop_signal():
-                    # Cancel remaining futures
+                    # Cancel remaining futures if aborted
                     for f, _, _ in futures_submitted:
                         if not f.done():
                             f.cancel()
@@ -241,7 +199,7 @@ class Matcher:
                 except Exception:
                     pass
 
-                # Find the start, end for this future
+                # Find the start, end for this future to update progress
                 for f, s, e in futures_submitted:
                     if f == future:
                         current_comparison += _pair_range_count(s, e, n)
