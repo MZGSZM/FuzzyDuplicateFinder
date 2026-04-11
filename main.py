@@ -143,6 +143,7 @@ class ScanAndMatchWorker(QThread):
             
             if self.is_stopped(): matcher.close(); self.aborted.emit(); return
             
+            self.progress_update.emit("Finalizing matches...")
             final_matches = []
             for group in exact:
                 base = group[0]

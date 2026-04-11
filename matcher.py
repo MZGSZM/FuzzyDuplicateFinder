@@ -212,6 +212,9 @@ class Matcher:
             ranges.append((start, end))
             start = end
 
+        # Reverse ranges to process smaller chunks first for smoother progress
+        ranges = ranges[::-1]
+
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=worker_count)
         futures_submitted = []
         try:
