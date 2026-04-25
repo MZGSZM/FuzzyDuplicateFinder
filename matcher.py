@@ -163,7 +163,7 @@ class Matcher:
                 hash_map.setdefault(h, []).append(f)
         return [group for group in hash_map.values() if len(group) > 1]
 
-    def find_fuzzy_matches(self, stop_signal=None, progress_callback=None):
+    def find_fuzzy_matches(self, stop_signal=None, progress_callback=None, max_workers=None):
         """
         Multi-threaded fuzzy comparison across all indexed files.
 
@@ -191,7 +191,11 @@ class Matcher:
         total_comparisons = (n * (n - 1)) // 2
         current_comparison = 0
 
-        worker_count = min(MAX_MATCH_WORKERS, max(1, n - 1))
+        worker_count = (
+            max_workers
+            if max_workers and max_workers > 0
+            else min(MAX_MATCH_WORKERS, max(1, n - 1))
+        )
         chunk_size = max(1, n // (worker_count * 16))
 
         ranges = []
