@@ -255,7 +255,7 @@ class Scanner:
         except Exception:
             return False, filepath
 
-    def scan_directory(self, folder_list, db_path, stop_signal=None, progress_callback=None):
+    def scan_directory(self, folder_list, db_path, stop_signal=None, progress_callback=None, max_workers=None):
         """Scan directories and dispatch worker threads for hashing."""
         print("Starting Scan")
         self.db = DatabaseManager(db_path)
@@ -294,7 +294,11 @@ class Scanner:
         processed_count = 0
         skipped_files_list = []
 
-        worker_count = min(MAX_SCAN_WORKERS, max(1, (os.cpu_count() or 4) * 2))
+        worker_count = (
+            max_workers
+            if max_workers and max_workers > 0
+            else min(MAX_SCAN_WORKERS, max(1, (os.cpu_count() or 4) * 2))
+        )
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=worker_count)
         future_to_file = {}
 
