@@ -18,6 +18,7 @@ from PyQt6.QtGui import QDesktopServices
 from send2trash import send2trash
 from PIL import Image
 
+import multiprocessing
 from scanner_engine import Scanner, DatabaseManager
 from scanner_engine import IMAGE_EXTS, VIDEO_EXTS, AUDIO_EXTS
 from matcher import Matcher
@@ -355,14 +356,14 @@ class DuplicateFinderApp(QMainWindow):
         self.spin_workers.setRange(1, (os.cpu_count() or 4) * 2)
         self.spin_workers.setValue(os.cpu_count() or 4)
         self.spin_workers.setToolTip(
-            "Maximum worker threads used during scanning and matching.\n"
+            "Maximum worker threads for scanning and matching.\n"
             f"Your system reports {os.cpu_count() or '?'} logical CPU core(s)."
         )
         self.spin_workers.setFixedWidth(55)
         self.spin_workers.setStyleSheet(
             "QSpinBox { background-color: #333; color: #eee; border: 1px solid #555; "
             "border-radius: 3px; padding: 2px 4px; } "
-            "QSpinBox::up-button, QSpinBox::down-button { background: #444; } "
+            "QSpinBox::up-button, QSpinBox::down-button { background: #444; }"
         )
 
         btn_row.addWidget(btn_add_folder)
@@ -992,14 +993,6 @@ class DuplicateFinderApp(QMainWindow):
         """
         Remove the current match from both self.matches and the list widget,
         then advance to the next item (or show 'Done' if none remain).
-
-        FIXED BUG: Previously used blockSignals(True) during takeItem. Qt
-        silently moves the internal selection to the next row while signals are
-        blocked, so the subsequent setCurrentRow(new_row) finds the list already
-        at new_row and emits no currentRowChanged signal -- meaning
-        load_match_details is never called and the preview stays stale.
-        Fix: disconnect the slot instead, remove the item, reconnect, then call
-        load_match_details explicitly so it always runs exactly once.
         """
         idx = self.current_match_index
         if idx < 0 or idx >= len(self.matches):
@@ -1008,28 +1001,20 @@ class DuplicateFinderApp(QMainWindow):
         # Remove from data model
         del self.matches[idx]
 
-        # Disconnect to prevent any premature or duplicate handler calls
-        # during takeItem and the subsequent setCurrentRow.
-        self.match_list.currentRowChanged.disconnect(self.load_match_details)
+        # Block signals so currentRowChanged doesn't fire mid-removal
+        self.match_list.blockSignals(True)
         self.match_list.takeItem(idx)
+        self.match_list.blockSignals(False)
 
         if not self.matches:
-            self.match_list.currentRowChanged.connect(self.load_match_details)
             self.current_match_index = -1
             QMessageBox.information(self, "Done", "No more matches!")
             return
 
         # Stay at the same index if possible, otherwise go to the last item
         new_row = min(idx, len(self.matches) - 1)
-        self.current_match_index = -1
+        self.current_match_index = -1  # reset so load_match_details doesn't bail early
         self.match_list.setCurrentRow(new_row)
-
-        # Reconnect before the explicit call so future navigation works normally
-        self.match_list.currentRowChanged.connect(self.load_match_details)
-
-        # Always call explicitly: setCurrentRow above may not emit
-        # currentRowChanged when Qt already moved selection to new_row.
-        self.load_match_details(new_row)
 
     def next_match(self):
         """Skip the current match without deleting anything."""
@@ -1252,6 +1237,9 @@ class DuplicateFinderApp(QMainWindow):
 
 
 if __name__ == "__main__":
+    # Required for ProcessPoolExecutor to work correctly in a
+    # PyInstaller-frozen executable on Windows (spawn start method).
+    multiprocessing.freeze_support()
     app = QApplication(sys.argv)
     window = DuplicateFinderApp()
     window.show()
