@@ -120,7 +120,7 @@ Priorities are saved inside the index database, so they persist across sessions 
 
 Fuzzy matches are scored on a weighted combination of signals. Weights are only applied when the relevant data is available for both files.
 
-| Signal | Weight | Method |
+| Signal | Relative weight | Method |
 |--------|--------|--------|
 | Perceptual hash | 50% | pHash distance (images and video thumbnails) |
 | Audio fingerprint | 50% | Chroma-based MD5 via librosa (audio files) |
@@ -128,7 +128,11 @@ Fuzzy matches are scored on a weighted combination of signals. Weights are only 
 | File size similarity | 10% | Proportional difference |
 | Extension match | 5% | Exact string match |
 
-Files from different media categories (image/video vs audio vs text) are never compared against each other. Pairs that are already reported as exact duplicates are excluded from the fuzzy pass.
+Weights are **relative**, not absolute percentages: the final score is normalized by the sum of the weights that actually applied. For a typical image pair with a filename, a size and a matching extension, the perceptual hash therefore accounts for 50 / 0.85 = ~59% of the score, not 50%.
+
+Text and code files have **no content comparison**. They are scored on filename, size and extension only, so two byte-identical files with very different names will not be reported as a fuzzy match (they are still caught by exact MD5 matching).
+
+Files from different media categories (image/video vs audio vs text) are never compared against each other. Pairs that are already reported as exact duplicates are excluded from the fuzzy pass, and hardlinks to the same inode are not reported as duplicates since deleting one frees no space.
 
 The default similarity threshold is **70%**. Only matches at or above this score appear in the results list.
 
