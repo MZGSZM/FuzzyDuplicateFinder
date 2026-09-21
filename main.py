@@ -1,30 +1,26 @@
-import sys
-import os
-import cv2
 import math
+import multiprocessing
+import os
 import subprocess
+import sys
 import time
 from datetime import datetime
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
-                             QHBoxLayout, QPushButton, QLabel, QFileDialog,
-                             QListWidget, QListWidgetItem, QSplitter, QMessageBox,
-                             QProgressBar, QFrame, QSizePolicy, QMenu, QTableWidget,
-                             QTableWidgetItem, QHeaderView, QAbstractItemView,
-                             QDialog, QTextEdit, QProgressDialog)
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
-from PyQt6.QtGui import QPixmap, QImage, QAction
-from PyQt6.QtCore import QUrl
-from PyQt6.QtGui import QDesktopServices
-from send2trash import send2trash
-from PIL import Image
 
-import multiprocessing
-from scanner_engine import Scanner, DatabaseManager
-from scanner_engine import IMAGE_EXTS, VIDEO_EXTS, AUDIO_EXTS
+import cv2
+from PyQt6.QtCore import Qt, QThread, QTimer, QUrl, pyqtSignal
+from PyQt6.QtGui import QAction, QDesktopServices, QImage, QImageReader, QPixmap
+from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QDialog, QFileDialog,
+                             QFrame, QHBoxLayout, QHeaderView, QLabel, QListWidget,
+                             QListWidgetItem, QMainWindow, QMessageBox, QProgressBar,
+                             QProgressDialog, QPushButton, QSizePolicy, QSplitter,
+                             QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
+from send2trash import send2trash
+
 from matcher import Matcher
+from scanner_engine import AUDIO_EXTS, IMAGE_EXTS, VIDEO_EXTS, DatabaseManager, Scanner
 
 # Version Info
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 GITHUB_URL = "https://github.com/MZGSZM/FuzzyDuplicateFinder"
 
 # Consolidated extension sets used by the UI (kept in sync with scanner_engine)
@@ -32,23 +28,32 @@ UI_IMAGE_EXTS = IMAGE_EXTS
 UI_VIDEO_EXTS = VIDEO_EXTS
 UI_AUDIO_EXTS = AUDIO_EXTS
 
+DEFAULT_FOLDER_PRIORITY = 10
+
+# Largest dimension a preview is decoded at. Full-resolution decodes of large
+# photographs cost hundreds of megabytes and are pointless for a preview pane.
+PREVIEW_MAX_DIM = 2400
+
+PROGRESS_STEPS = 1000
+
+IMG_PANEL_STYLE = (
+    "background-color: #111; border: 1px solid #333; border-radius: 4px; "
+    "color: #777; font-size: 16px;"
+)
+
 
 def format_size(size_bytes):
-    if size_bytes == 0:
+    if not size_bytes:
         return "0 B"
-    size_name = ("B", "KB", "MB", "GB", "TB")
+    size_name = ("B", "KB", "MB", "GB", "TB", "PB")
     i = int(math.floor(math.log(size_bytes, 1024)))
+    i = max(0, min(i, len(size_name) - 1))
     p = math.pow(1024, i)
-    s = round(size_bytes / p, 2)
-    return f"{s} {size_name[i]}"
+    return f"{round(size_bytes / p, 2)} {size_name[i]}"
 
 
 def open_file_external(filepath):
-    """
-    Open a file in the OS default application.
-    FIXED: original code used os.system("open ...") which only works on macOS.
-    Now uses subprocess for cross-platform support.
-    """
+    """Open a file in the OS default application."""
     try:
         if os.name == 'nt':
             os.startfile(filepath)
@@ -56,8 +61,8 @@ def open_file_external(filepath):
             subprocess.Popen(['open', filepath])
         else:
             subprocess.Popen(['xdg-open', filepath])
-    except Exception as e:
-        print(f"Failed to open file: {e}")
+    except Exception as exc:
+        print(f"Failed to open file: {exc}")
 
 
 class SkippedFileDialog(QDialog):
@@ -70,9 +75,11 @@ class SkippedFileDialog(QDialog):
         layout = QVBoxLayout(self)
 
         lbl = QLabel(
-            f"{len(skipped_files)} files could not be processed "
-            f"(permission denied, corrupted, or unreadable):"
+            f"{len(skipped_files)} file(s) could not be fully processed "
+            f"(permission denied, corrupted, or unreadable). They are still "
+            f"indexed for exact-duplicate detection where possible:"
         )
+        lbl.setWordWrap(True)
         layout.addWidget(lbl)
 
         self.list_widget = QListWidget()
@@ -103,27 +110,31 @@ class SkippedFileDialog(QDialog):
         )
         if path:
             try:
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write("\n".join(self.skipped_files))
+                with open(path, "w", encoding="utf-8") as handle:
+                    handle.write("\n".join(self.skipped_files))
                 QMessageBox.information(self, "Export Successful", f"Saved to {path}")
-            except Exception as e:
-                QMessageBox.critical(self, "Error", str(e))
+            except Exception as exc:
+                QMessageBox.critical(self, "Error", str(exc))
 
 
 class ScanAndMatchWorker(QThread):
     progress_update = pyqtSignal(str)
-    progress_value  = pyqtSignal(int, int)   # current, total
-    scan_complete   = pyqtSignal(list)        # emits skipped files list
-    finished        = pyqtSignal(list)        # emits final match list
-    error           = pyqtSignal(str)
-    aborted         = pyqtSignal()
+    progress_value = pyqtSignal(int, int)      # current, total
+    scan_complete = pyqtSignal(list)           # skipped files
+    # Named so it does not shadow QThread.finished, which has a different
+    # signature and is used by Qt's own cleanup idioms.
+    matching_finished = pyqtSignal(list, list)  # matches, exact groups (paths)
+    error = pyqtSignal(str)
+    aborted = pyqtSignal()
 
-    def __init__(self, folder_list, db_path, skip_scan=False, max_workers=None):
+    def __init__(self, folder_list, db_path, skip_scan=False,
+                 scan_workers=None, match_workers=None):
         super().__init__()
         self.folder_list = folder_list
-        self.db_path     = db_path
-        self.skip_scan   = skip_scan
-        self.max_workers = max_workers
+        self.db_path = db_path
+        self.skip_scan = skip_scan
+        self.scan_workers = scan_workers
+        self.match_workers = match_workers
         self._is_running = True
 
     def stop(self):
@@ -136,7 +147,7 @@ class ScanAndMatchWorker(QThread):
         if self._is_running:
             self.progress_value.emit(current, total)
             self.progress_update.emit(
-                f"Scanning: {current} / {total} files  (Skipped: {skipped})"
+                f"Scanning: {current} / {total} files  (Issues: {skipped})"
             )
 
     def on_match_progress(self, current, total):
@@ -144,6 +155,7 @@ class ScanAndMatchWorker(QThread):
             self.progress_value.emit(current, total)
 
     def run(self):
+        matcher = None
         try:
             if not self.skip_scan:
                 self.progress_update.emit("Phase 1: Indexing files...")
@@ -153,7 +165,7 @@ class ScanAndMatchWorker(QThread):
                     self.db_path,
                     stop_signal=self.is_stopped,
                     progress_callback=self.on_scan_progress,
-                    max_workers=self.max_workers,
+                    max_workers=self.scan_workers,
                 )
 
                 if self.is_stopped():
@@ -172,57 +184,63 @@ class ScanAndMatchWorker(QThread):
             self.progress_update.emit("Phase 2: Analyzing content...")
             matcher = Matcher(self.db_path)
 
-            exact = matcher.find_exact_duplicates()
+            exact_groups = matcher.find_exact_duplicates()
             if self.is_stopped():
-                matcher.close()
                 self.aborted.emit()
                 return
 
             fuzzy = matcher.find_fuzzy_matches(
                 stop_signal=self.is_stopped,
                 progress_callback=self.on_match_progress,
-                max_workers=self.max_workers,
+                max_workers=self.match_workers,
             )
 
             if self.is_stopped():
-                matcher.close()
                 self.aborted.emit()
                 return
 
             self.progress_update.emit("Finalizing matches...")
 
             final_matches = []
+            group_paths = []
 
-            # Exact duplicates first
-            for group in exact:
-                base = group[0]
-                for duplicate in group[1:]:
+            for group in exact_groups:
+                paths = [f['path'] for f in group]
+                group_paths.append(paths)
+                base = paths[0]
+                for duplicate in paths[1:]:
                     final_matches.append({
-                        'file_a': base['path'],
-                        'file_b': duplicate['path'],
+                        'file_a': base,
+                        'file_b': duplicate,
                         'score': 100.0,
                         'type': 'EXACT',
                     })
 
-            # Fuzzy matches (exact pairs already excluded inside matcher)
-            for f in fuzzy:
-                f['type'] = 'FUZZY'
-                final_matches.append(f)
+            for match in fuzzy:
+                match['type'] = 'FUZZY'
+                final_matches.append(match)
 
-            final_matches.sort(key=lambda x: x['score'], reverse=True)
-            self.finished.emit(final_matches)
+            final_matches.sort(key=lambda m: m['score'], reverse=True)
+            self.matching_finished.emit(final_matches, group_paths)
 
-        except Exception as e:
-            if not self.is_stopped():
-                self.error.emit(str(e))
+        except Exception as exc:
+            # A failure that happens while stopping is an abort, not an error,
+            # but it must still emit something or the UI stays disabled.
+            if self.is_stopped():
+                self.aborted.emit()
+            else:
+                self.error.emit(str(exc))
+        finally:
+            if matcher is not None:
+                matcher.close()
 
 
 class AutoPruneWorker(QThread):
     progress_update = pyqtSignal(str)
-    progress_value  = pyqtSignal(int, int)
-    finished        = pyqtSignal(int)   # deleted count
-    error           = pyqtSignal(str)
-    aborted         = pyqtSignal()
+    progress_value = pyqtSignal(int, int)
+    prune_finished = pyqtSignal(int, list)   # deleted count, deleted paths
+    error = pyqtSignal(str)
+    aborted = pyqtSignal()
 
     def __init__(self, files_to_trash):
         super().__init__()
@@ -236,35 +254,35 @@ class AutoPruneWorker(QThread):
         return not self._is_running
 
     def run(self):
+        deleted = []
         try:
-            deleted_count = 0
             total = len(self.files_to_trash)
-
             for i, filepath in enumerate(self.files_to_trash):
                 if self.is_stopped():
                     self.aborted.emit()
                     return
-
                 try:
                     if os.path.exists(filepath):
                         send2trash(filepath)
-                        deleted_count += 1
-                except Exception as e:
-                    print(f"Failed to trash {filepath}: {e}")
+                        deleted.append(filepath)
+                except Exception as exc:
+                    print(f"Failed to trash {filepath}: {exc}")
 
                 self.progress_value.emit(i + 1, total)
                 self.progress_update.emit(f"Pruning: {i + 1} / {total} files")
 
-            self.finished.emit(deleted_count)
-        except Exception as e:
-            if not self.is_stopped():
-                self.error.emit(str(e))
+            self.prune_finished.emit(len(deleted), deleted)
+        except Exception as exc:
+            if self.is_stopped():
+                self.aborted.emit()
+            else:
+                self.error.emit(str(exc))
 
 
 class ThreadCountWidget(QWidget):
     """
-    A ▼ value ▲ stepper widget that matches the folder-priority arrow buttons exactly.
-    Exposes .value() so it can be used as a drop-in for the QSpinBox it replaces.
+    A down/value/up stepper that matches the folder-priority arrow buttons.
+    Exposes .value() so it is a drop-in for the QSpinBox it replaces.
     """
 
     _ARROW_STYLE = """
@@ -280,14 +298,14 @@ class ThreadCountWidget(QWidget):
     def __init__(self, min_val=1, max_val=8, default=4, parent=None):
         super().__init__(parent)
         self._value = max(min_val, min(default, max_val))
-        self._min   = min_val
-        self._max   = max_val
+        self._min = min_val
+        self._max = max_val
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
 
-        btn_down = QPushButton("▼")
+        btn_down = QPushButton("\u25bc")
         btn_down.setMaximumWidth(20)
         btn_down.setMaximumHeight(16)
         btn_down.setStyleSheet(self._ARROW_STYLE)
@@ -298,7 +316,7 @@ class ThreadCountWidget(QWidget):
         self._lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._lbl.setStyleSheet("color: white; font-weight: bold; min-width: 26px;")
 
-        btn_up = QPushButton("▲")
+        btn_up = QPushButton("\u25b2")
         btn_up.setMaximumWidth(20)
         btn_up.setMaximumHeight(16)
         btn_up.setStyleSheet(self._ARROW_STYLE)
@@ -329,15 +347,23 @@ class DuplicateFinderApp(QMainWindow):
         self.setWindowTitle("Fuzzy Duplicate Finder")
         self.resize(1400, 950)
 
-        self.scan_folders        = []
-        self.matches             = []
-        self.skipped_files       = []
+        self.scan_folders = []
+        self.matches = []
+        self.exact_groups = []
+        self.skipped_files = []
         self.current_match_index = -1
-        self.current_db_path     = None
-        self.worker              = None
-        self.prune_worker        = None
+        self.current_db_path = None
+        self.worker = None
+        self.prune_worker = None
         self.prune_progress_dialog = None
-        self.pixmap_cache        = {'A': None, 'B': None}
+        self.pixmap_cache = {'A': None, 'B': None}
+
+        # Rescaling a large pixmap on every resize event makes dragging the
+        # window stutter, so coalesce them.
+        self._resize_timer = QTimer(self)
+        self._resize_timer.setSingleShot(True)
+        self._resize_timer.setInterval(80)
+        self._resize_timer.timeout.connect(self._apply_cached_pixmaps)
 
         # Menu bar
         menubar = self.menuBar()
@@ -421,8 +447,10 @@ class DuplicateFinderApp(QMainWindow):
             default=cpu_count,
         )
         self.spin_workers.setToolTip(
-            "Maximum worker threads for scanning and matching.\n"
-            f"Your system reports {cpu_count} logical CPU core(s)."
+            "Maximum worker threads used while indexing files.\n"
+            f"Your system reports {cpu_count} logical CPU core(s).\n"
+            "The matching phase sizes itself separately and never exceeds "
+            "your core count."
         )
 
         btn_row.addWidget(btn_add_folder)
@@ -551,8 +579,8 @@ class DuplicateFinderApp(QMainWindow):
         hover_map = {
             "#d32f2f": "#ef5350",
             "#007acc": "#2196f3",
-            "#444":    "#666",
-            "#555":    "#777",
+            "#444": "#666",
+            "#555": "#777",
         }
         hover_color = hover_map.get(bg, bg)
         btn.setStyleSheet(
@@ -575,9 +603,7 @@ class DuplicateFinderApp(QMainWindow):
 
         lbl_img = QLabel()
         lbl_img.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl_img.setStyleSheet(
-            "background-color: #111; border: 1px solid #333; border-radius: 4px;"
-        )
+        lbl_img.setStyleSheet(IMG_PANEL_STYLE)
         lbl_img.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         lbl_img.setScaledContents(False)
         layout.addWidget(lbl_img)
@@ -619,13 +645,13 @@ class DuplicateFinderApp(QMainWindow):
 
         return {
             "container": container,
-            "img":       lbl_img,
-            "filename":  lbl_filename,
-            "path":      lbl_path,
-            "details":   lbl_details,
-            "dates":     lbl_dates,
-            "btn_open":  btn_open,
-            "filepath":  None,
+            "img": lbl_img,
+            "filename": lbl_filename,
+            "path": lbl_path,
+            "details": lbl_details,
+            "dates": lbl_dates,
+            "btn_open": btn_open,
+            "filepath": None,
         }
 
     # -------------------------------------------------------------------------
@@ -635,10 +661,10 @@ class DuplicateFinderApp(QMainWindow):
     def add_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Directory")
         if folder:
-            for f in self.scan_folders:
-                if f['path'] == folder:
+            for existing in self.scan_folders:
+                if existing['path'] == folder:
                     return
-            self.scan_folders.append({'path': folder, 'priority': 10})
+            self.scan_folders.append({'path': folder, 'priority': DEFAULT_FOLDER_PRIORITY})
             self.refresh_folder_table()
             self.btn_scan.setEnabled(True)
 
@@ -653,9 +679,14 @@ class DuplicateFinderApp(QMainWindow):
         )
         if db_path:
             self.current_db_path = db_path
-            db = DatabaseManager(db_path)
-            roots = db.get_roots()
-            db.close()
+            try:
+                db = DatabaseManager(db_path)
+                roots = db.get_roots()
+                db.close()
+            except Exception as exc:
+                QMessageBox.critical(self, "Error", f"Could not open index: {exc}")
+                self.current_db_path = None
+                return
             if roots:
                 self.scan_folders = roots
                 self.refresh_folder_table()
@@ -687,19 +718,19 @@ class DuplicateFinderApp(QMainWindow):
                 QPushButton:pressed { background-color: #1976d2; }
             """
 
-            btn_up = QPushButton("▲")
+            btn_up = QPushButton("\u25b2")
             btn_up.setMaximumWidth(20)
             btn_up.setMaximumHeight(16)
             btn_up.setStyleSheet(arrow_style)
 
-            btn_down = QPushButton("▼")
+            btn_down = QPushButton("\u25bc")
             btn_down.setMaximumWidth(20)
             btn_down.setMaximumHeight(16)
             btn_down.setStyleSheet(arrow_style)
 
-            btn_up.folder_index   = i
+            btn_up.folder_index = i
             btn_up.priority_label = lbl_value
-            btn_down.folder_index   = i
+            btn_down.folder_index = i
             btn_down.priority_label = lbl_value
 
             btn_up.clicked.connect(self._on_priority_up_clicked)
@@ -710,25 +741,23 @@ class DuplicateFinderApp(QMainWindow):
             priority_layout.addWidget(btn_up)
             self.folder_table.setCellWidget(i, 1, priority_widget)
 
-    def _on_priority_up_clicked(self):
+    def _adjust_priority(self, delta):
         btn = self.sender()
-        idx = btn.folder_index
-        label = btn.priority_label
-        if idx < len(self.scan_folders):
-            new_val = min(100, self.scan_folders[idx]['priority'] + 1)
-            self.scan_folders[idx]['priority'] = new_val
+        idx = getattr(btn, 'folder_index', None)
+        label = getattr(btn, 'priority_label', None)
+        if idx is None or idx >= len(self.scan_folders):
+            return
+        new_val = max(0, min(100, self.scan_folders[idx]['priority'] + delta))
+        self.scan_folders[idx]['priority'] = new_val
+        if label is not None:
             label.setText(str(new_val))
-            self.persist_folder_priorities()
+        self.persist_folder_priorities()
+
+    def _on_priority_up_clicked(self):
+        self._adjust_priority(1)
 
     def _on_priority_down_clicked(self):
-        btn = self.sender()
-        idx = btn.folder_index
-        label = btn.priority_label
-        if idx < len(self.scan_folders):
-            new_val = max(0, self.scan_folders[idx]['priority'] - 1)
-            self.scan_folders[idx]['priority'] = new_val
-            label.setText(str(new_val))
-            self.persist_folder_priorities()
+        self._adjust_priority(-1)
 
     # -------------------------------------------------------------------------
     # Scanning
@@ -770,8 +799,8 @@ class DuplicateFinderApp(QMainWindow):
                 try:
                     if os.path.exists(db_file):
                         os.remove(db_file)
-                except Exception as e:
-                    QMessageBox.warning(self, "Warning", f"Could not delete old database: {e}")
+                except Exception as exc:
+                    QMessageBox.warning(self, "Warning", f"Could not delete old database: {exc}")
                     return
 
         self.start_worker(skip_scan=False)
@@ -779,44 +808,61 @@ class DuplicateFinderApp(QMainWindow):
     def start_worker(self, skip_scan=False):
         self.lbl_status.setText("Working...")
         self.match_list.clear()
+        self.matches = []
+        self.exact_groups = []
+        self.current_match_index = -1
         self.btn_skipped.hide()
         self.skipped_files = []
 
-        if not skip_scan:
-            self.progress_bar.setRange(0, 0)
-            self.progress_bar.show()
+        self.progress_bar.setRange(0, 0)
+        self.progress_bar.show()
 
         self.btn_scan.setEnabled(False)
         self.btn_stop.setEnabled(True)
 
+        cpu_count = os.cpu_count() or 4
         self.worker = ScanAndMatchWorker(
-            self.scan_folders, self.current_db_path, skip_scan=skip_scan,
-            max_workers=self.spin_workers.value()
+            self.scan_folders,
+            self.current_db_path,
+            skip_scan=skip_scan,
+            scan_workers=self.spin_workers.value(),
+            # Matching runs in processes, so oversubscribing cores costs
+            # memory and context switches rather than buying throughput.
+            match_workers=min(self.spin_workers.value(), cpu_count),
         )
-        self.worker.progress_update.connect(lambda s: self.lbl_status.setText(s))
+        self.worker.progress_update.connect(self.lbl_status.setText)
         self.worker.progress_value.connect(self.update_progress_bar)
         self.worker.scan_complete.connect(self.on_scan_phase_complete)
-        self.worker.finished.connect(self.on_process_complete)
+        self.worker.matching_finished.connect(self.on_process_complete)
         self.worker.aborted.connect(self.on_scan_aborted)
         self.worker.error.connect(self.on_error)
         self.worker.start()
 
     def update_progress_bar(self, current, total):
+        """
+        Normalise to a fixed step count.
+
+        Qt's progress bar range is a C int. The matching phase used to report
+        n*(n-1)/2 directly, which overflows above roughly 65,500 files.
+        """
         self.progress_bar.show()
-        self.progress_bar.setRange(0, total)
-        self.progress_bar.setValue(current)
+        if total <= 0:
+            self.progress_bar.setRange(0, 0)
+            return
+        self.progress_bar.setRange(0, PROGRESS_STEPS)
+        value = int(max(0, min(current, total)) * PROGRESS_STEPS / total)
+        self.progress_bar.setValue(value)
 
     def on_scan_phase_complete(self, skipped_list):
         self.skipped_files = skipped_list
         if skipped_list:
-            self.btn_skipped.setText(f"{len(skipped_list)} Files Skipped (View)")
+            self.btn_skipped.setText(f"{len(skipped_list)} Files With Issues (View)")
             self.btn_skipped.show()
 
     def show_skipped_dialog(self):
         if not self.skipped_files:
             return
-        dlg = SkippedFileDialog(self.skipped_files, self)
-        dlg.exec()
+        SkippedFileDialog(self.skipped_files, self).exec()
 
     def stop_scan(self):
         if self.worker and self.worker.isRunning():
@@ -830,20 +876,15 @@ class DuplicateFinderApp(QMainWindow):
         self.btn_stop.setEnabled(False)
         self.lbl_status.setText("Operation aborted.")
 
-    def on_process_complete(self, matches):
+    def on_process_complete(self, matches, exact_groups):
         self.progress_bar.hide()
         self.btn_scan.setEnabled(True)
         self.btn_stop.setEnabled(False)
         self.matches = matches
-        self.lbl_status.setText(f"Found {len(matches)} duplicate(s).")
-        for m in self.matches:
-            name_a = os.path.basename(m['file_a'])
-            prefix = "[=]" if m['type'] == 'EXACT' else f"[{int(m['score'])}%]"
-            item = QListWidgetItem(f"{prefix} {name_a}")
-            self.match_list.addItem(item)
-        if self.matches:
-            self.match_list.setCurrentRow(0)
-        else:
+        self.exact_groups = exact_groups
+        self.lbl_status.setText(f"Found {len(matches)} duplicate pair(s).")
+        self._rebuild_match_list(0 if matches else -1)
+        if not matches:
             QMessageBox.information(self, "Clean!", "No duplicates found.")
 
     def on_error(self, message):
@@ -856,6 +897,25 @@ class DuplicateFinderApp(QMainWindow):
     # Match display
     # -------------------------------------------------------------------------
 
+    def _rebuild_match_list(self, select_row):
+        self.match_list.blockSignals(True)
+        self.match_list.clear()
+        for match in self.matches:
+            name_a = os.path.basename(match['file_a'])
+            prefix = "[=]" if match['type'] == 'EXACT' else f"[{int(match['score'])}%]"
+            self.match_list.addItem(QListWidgetItem(f"{prefix} {name_a}"))
+        self.match_list.blockSignals(False)
+
+        self.current_match_index = -1
+        if not self.matches or select_row < 0:
+            return
+        row = max(0, min(select_row, len(self.matches) - 1))
+        self.match_list.setCurrentRow(row)
+        # setCurrentRow does not emit currentRowChanged when the index is
+        # unchanged, so drive the panels explicitly.
+        self.load_match_details(row)
+        self.match_list.scrollToItem(self.match_list.currentItem())
+
     def load_match_details(self, row_index):
         if row_index < 0 or row_index >= len(self.matches):
             return
@@ -866,47 +926,82 @@ class DuplicateFinderApp(QMainWindow):
         self.load_file_to_panel(self.panel_a, data['file_a'], 'A')
         self.load_file_to_panel(self.panel_b, data['file_b'], 'B')
 
+    @staticmethod
+    def _load_preview_image(filepath, panel_size):
+        """
+        Decode an image at preview resolution.
+
+        Returns (pixmap|None, "WxH"|""). QImageReader can scale during decode,
+        so a 100 megapixel photograph never becomes a 400 MB QPixmap.
+        """
+        reader = QImageReader(filepath)
+        reader.setAutoTransform(True)
+        source = reader.size()
+        res_str = f"{source.width()}x{source.height()}" if source.isValid() else ""
+
+        if source.isValid():
+            target = max(PREVIEW_MAX_DIM, panel_size.width(), panel_size.height())
+            longest = max(source.width(), source.height())
+            if longest > target:
+                scale = target / longest
+                reader.setScaledSize(source * scale)
+
+        image = reader.read()
+        if image.isNull():
+            return None, res_str
+        return QPixmap.fromImage(image), res_str
+
     def load_file_to_panel(self, panel, filepath, cache_key):
         panel['filepath'] = filepath
         self.pixmap_cache[cache_key] = None
 
+        # Reset per-file: the audio and generic branches below change the font
+        # size, and leaving that applied corrupts every later preview.
+        panel['img'].setStyleSheet(IMG_PANEL_STYLE)
+        panel['img'].setPixmap(QPixmap())
+        panel['img'].setText("")
+
         if not os.path.exists(filepath):
             panel['filename'].setText("File Missing")
             panel['path'].setText(filepath)
+            panel['details'].setText("")
+            panel['dates'].setText("")
             panel['img'].setText("Missing on Disk")
             return
 
-        filename = os.path.basename(filepath)
-        stats    = os.stat(filepath)
+        try:
+            stats = os.stat(filepath)
+        except OSError as exc:
+            panel['filename'].setText("Unreadable")
+            panel['path'].setText(filepath)
+            panel['details'].setText(str(exc))
+            panel['img'].setText("Unreadable")
+            return
+
         size_str = format_size(stats.st_size)
-        ext      = os.path.splitext(filepath)[1].lower()
-        c_time   = datetime.fromtimestamp(stats.st_ctime).strftime('%Y-%m-%d %H:%M')
-        m_time   = datetime.fromtimestamp(stats.st_mtime).strftime('%Y-%m-%d %H:%M')
+        ext = os.path.splitext(filepath)[1].lower()
+        c_time = datetime.fromtimestamp(stats.st_ctime).strftime('%Y-%m-%d %H:%M')
+        m_time = datetime.fromtimestamp(stats.st_mtime).strftime('%Y-%m-%d %H:%M')
 
         panel['dates'].setText(f"Created: {c_time}  |  Modified: {m_time}")
-        panel['filename'].setText(filename)
+        panel['filename'].setText(os.path.basename(filepath))
         panel['path'].setText(os.path.dirname(filepath))
 
         try:
             panel['btn_open'].clicked.disconnect()
-        except Exception:
+        except TypeError:
             pass
         panel['btn_open'].clicked.connect(
-            lambda checked=False, p=filepath: open_file_external(p)
+            lambda checked=False, target=filepath: open_file_external(target)
         )
 
-        res_str   = ""
+        res_str = ""
         extra_str = ""
-        is_image  = ext in UI_IMAGE_EXTS
-        is_video  = ext in UI_VIDEO_EXTS
-        is_audio  = ext in UI_AUDIO_EXTS
 
-        if is_image:
+        if ext in UI_IMAGE_EXTS:
             try:
-                with Image.open(filepath) as im:
-                    res_str = f"{im.width}x{im.height}"
-                pixmap = QPixmap(filepath)
-                if not pixmap.isNull():
+                pixmap, res_str = self._load_preview_image(filepath, panel['img'].size())
+                if pixmap is not None:
                     self.pixmap_cache[cache_key] = pixmap
                     self.update_image_display(panel, pixmap)
                 else:
@@ -914,85 +1009,86 @@ class DuplicateFinderApp(QMainWindow):
             except Exception:
                 panel['img'].setText("Image Error")
 
-        elif is_video:
+        elif ext in UI_VIDEO_EXTS:
+            cap = None
             try:
                 cap = cv2.VideoCapture(filepath)
-                if cap.isOpened():
-                    w           = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                    h           = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                    res_str     = f"{w}x{h}"
-                    fps         = cap.get(cv2.CAP_PROP_FPS)
+                if not cap.isOpened():
+                    panel['img'].setText("Video File")
+                else:
+                    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                    res_str = f"{width}x{height}"
+                    fps = cap.get(cv2.CAP_PROP_FPS)
                     frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
                     if fps > 0 and frame_count > 0:
-                        duration_sec = int(frame_count / fps)
-                        mins, secs   = divmod(duration_sec, 60)
-                        extra_str    = f"Duration: {mins}:{secs:02d}"
-                    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_count // 3)
+                        mins, secs = divmod(int(frame_count / fps), 60)
+                        extra_str = f"Duration: {mins}:{secs:02d}"
+                        cap.set(cv2.CAP_PROP_POS_FRAMES, int(frame_count // 3))
+
                     ret, frame = cap.read()
+                    if not ret:
+                        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                        ret, frame = cap.read()
+
                     if ret:
                         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                        h_img, w_img, ch = frame.shape
+                        h_img, w_img, channels = frame.shape
                         qimg = QImage(
                             frame.data, w_img, h_img,
-                            ch * w_img, QImage.Format.Format_RGB888
-                        )
+                            channels * w_img, QImage.Format.Format_RGB888
+                        ).copy()
                         pixmap = QPixmap.fromImage(qimg)
                         self.pixmap_cache[cache_key] = pixmap
                         self.update_image_display(panel, pixmap)
                     else:
                         panel['img'].setText("No Preview")
-                    cap.release()
-                else:
-                    panel['img'].setText("Video File")
             except Exception:
                 panel['img'].setText("Video Error")
+            finally:
+                if cap is not None:
+                    cap.release()
 
-        elif is_audio:
-            panel['img'].setText("🎵 Audio File")
-            panel['img'].setStyleSheet(
-                "background-color: #222; border: 1px solid #333; color: #888; font-size: 36px;"
-            )
+        elif ext in UI_AUDIO_EXTS:
+            panel['img'].setText("Audio File")
+            panel['img'].setStyleSheet(IMG_PANEL_STYLE + "font-size: 28px;")
 
         else:
-            panel['img'].setText(f"📄 {ext.upper()} File")
-            panel['img'].setStyleSheet(
-                "background-color: #222; border: 1px solid #333; color: #555; font-size: 20px;"
-            )
+            panel['img'].setText(f"{ext.upper()} File")
+            panel['img'].setStyleSheet(IMG_PANEL_STYLE + "font-size: 20px;")
 
         details = f"Size: {size_str}"
-        if res_str:   details += f"  |  Res: {res_str}"
-        if extra_str: details += f"  |  {extra_str}"
+        if res_str:
+            details += f"  |  Res: {res_str}"
+        if extra_str:
+            details += f"  |  {extra_str}"
         panel['details'].setText(details)
 
     def update_image_display(self, panel, pixmap):
         if pixmap and not pixmap.isNull():
-            w = panel['img'].width()
-            h = panel['img'].height()
-            if w > 10 and h > 10:
-                scaled = pixmap.scaled(
-                    w, h,
+            width = panel['img'].width()
+            height = panel['img'].height()
+            if width > 10 and height > 10:
+                panel['img'].setPixmap(pixmap.scaled(
+                    width, height,
                     Qt.AspectRatioMode.KeepAspectRatio,
                     Qt.TransformationMode.SmoothTransformation,
-                )
-                panel['img'].setPixmap(scaled)
+                ))
+
+    def _apply_cached_pixmaps(self):
+        if self.pixmap_cache['A']:
+            self.update_image_display(self.panel_a, self.pixmap_cache['A'])
+        if self.pixmap_cache['B']:
+            self.update_image_display(self.panel_b, self.pixmap_cache['B'])
 
     # -------------------------------------------------------------------------
     # File deletion
     # -------------------------------------------------------------------------
 
     def delete_file(self, target):
-        """
-        Delete one file from the current match pair and remove the match entry.
-
-        FIXED: the original code called next_match() after deletion, which just
-        moved the cursor without removing the deleted match from self.matches or
-        the list widget. The stale entry remained and would reload the (now
-        missing) file when revisited. Now the match row is removed immediately
-        and the list moves to the next item in place.
-        """
         if self.current_match_index == -1:
             return
-        panel    = self.panel_a if target == "A" else self.panel_b
+        panel = self.panel_a if target == "A" else self.panel_b
         filepath = panel.get('filepath')
         if not filepath:
             QMessageBox.warning(self, "Error", "No file selected.")
@@ -1010,21 +1106,18 @@ class DuplicateFinderApp(QMainWindow):
             if os.path.exists(filepath):
                 send2trash(filepath)
             self.lbl_status.setText(f"Deleted: {os.path.basename(filepath)}")
-            self._remove_current_match()
+            self._purge_deleted_paths([filepath])
             self.match_list.setFocus()
-        except Exception as e:
-            QMessageBox.critical(self, "Error", str(e))
+        except Exception as exc:
+            QMessageBox.critical(self, "Error", str(exc))
 
     def delete_both_files(self):
-        """Delete both files and remove the match entry."""
         if self.current_match_index == -1:
             return
         path_a = self.panel_a.get('filepath')
         path_b = self.panel_b.get('filepath')
         if not path_a or not path_b:
-            QMessageBox.warning(
-                self, "Error", "Both files must be available to delete both."
-            )
+            QMessageBox.warning(self, "Error", "Both files must be available to delete both.")
             return
 
         confirm = QMessageBox.question(
@@ -1035,53 +1128,59 @@ class DuplicateFinderApp(QMainWindow):
         if confirm != QMessageBox.StandardButton.Yes:
             return
 
-        deleted = 0
-        for p in (path_a, path_b):
+        deleted = []
+        for path in (path_a, path_b):
             try:
-                if os.path.exists(p):
-                    send2trash(p)
-                    deleted += 1
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to delete {p}: {e}")
+                if os.path.exists(path):
+                    send2trash(path)
+                deleted.append(path)
+            except Exception as exc:
+                QMessageBox.critical(self, "Error", f"Failed to delete {path}: {exc}")
 
-        self.lbl_status.setText(f"Deleted {deleted} file(s).")
-        self._remove_current_match()
+        self.lbl_status.setText(f"Deleted {len(deleted)} file(s).")
+        self._purge_deleted_paths(deleted)
         self.match_list.setFocus()
 
-    def _remove_current_match(self):
+    def _purge_deleted_paths(self, paths):
         """
-        Remove the current match from both self.matches and the list widget,
-        then advance to the next item (or show 'Done' if none remain).
+        Drop every match and group entry that references a deleted path.
+
+        Removing only the current row left stale entries elsewhere in the list
+        that rendered as "Missing on Disk" when the user reached them.
         """
-        idx = self.current_match_index
-        if idx < 0 or idx >= len(self.matches):
+        gone = set(paths)
+        if not gone:
             return
 
-        # Remove from data model
-        del self.matches[idx]
-
-        # Block signals so currentRowChanged doesn't fire mid-removal
-        self.match_list.blockSignals(True)
-        self.match_list.takeItem(idx)
-        self.match_list.blockSignals(False)
+        target_row = self.current_match_index
+        self.matches = [
+            m for m in self.matches
+            if m['file_a'] not in gone and m['file_b'] not in gone
+        ]
+        self.exact_groups = [
+            [p for p in group if p not in gone] for group in self.exact_groups
+        ]
+        self.exact_groups = [group for group in self.exact_groups if len(group) > 1]
 
         if not self.matches:
-            self.current_match_index = -1
+            self._rebuild_match_list(-1)
+            self.lbl_score.setText("0%")
+            for panel, key in ((self.panel_a, 'A'), (self.panel_b, 'B')):
+                panel['filepath'] = None
+                self.pixmap_cache[key] = None
+                panel['img'].setStyleSheet(IMG_PANEL_STYLE)
+                panel['img'].setPixmap(QPixmap())
+                panel['img'].setText("")
+                panel['filename'].setText("")
+                panel['path'].setText("")
+                panel['details'].setText("")
+                panel['dates'].setText("")
             QMessageBox.information(self, "Done", "No more matches!")
             return
 
-        # Stay at the same index if possible, otherwise go to the last item
-        new_row = min(idx, len(self.matches) - 1)
-        self.current_match_index = -1  # reset so load_match_details doesn't bail early
-        self.match_list.setCurrentRow(new_row)
-        # Qt won't emit currentRowChanged when the selected row index hasn't changed
-        # (e.g. deleting a non-last item causes the next item to slide into the same
-        # position). Calling load_match_details explicitly guarantees the panels always
-        # reflect the new current match regardless of whether the signal fired.
-        self.load_match_details(new_row)
+        self._rebuild_match_list(target_row)
 
     def next_match(self):
-        """Skip the current match without deleting anything."""
         current_row = self.match_list.currentRow()
         if current_row < self.match_list.count() - 1:
             self.match_list.setCurrentRow(current_row + 1)
@@ -1094,57 +1193,67 @@ class DuplicateFinderApp(QMainWindow):
     # -------------------------------------------------------------------------
 
     def get_folder_priority(self, filepath):
-        filepath = os.path.normpath(filepath)
+        """
+        Priority of the most specific scan root containing `filepath`.
+
+        Plain startswith matching treated /data/photos2 as being inside
+        /data/photos, and returning the first match rather than the longest
+        gave nested roots the wrong priority.
+        """
+        target = os.path.normcase(os.path.abspath(filepath))
+        best_priority = None
+        best_len = -1
         for folder_data in self.scan_folders:
-            root = os.path.normpath(folder_data['path'])
-            if filepath.startswith(root):
-                return folder_data['priority']
-        return 0
+            root = os.path.normcase(os.path.abspath(folder_data['path'])).rstrip(os.sep)
+            if target == root or target.startswith(root + os.sep):
+                if len(root) > best_len:
+                    best_len = len(root)
+                    best_priority = folder_data['priority']
+        # A file under no configured root should not be the preferred victim.
+        return best_priority if best_priority is not None else DEFAULT_FOLDER_PRIORITY
+
+    def _select_prune_victims(self):
+        """
+        One keeper per exact-hash group, everything else goes.
+
+        The previous implementation walked pairs built against group[0]. For a
+        group of three or more it could delete group[0] on the first pair and
+        then skip the rest, leaving duplicates behind.
+        """
+        victims = []
+        for group in self.exact_groups:
+            existing = [p for p in group if os.path.exists(p)]
+            if len(existing) < 2:
+                continue
+            # Highest priority wins; ties go to the shortest path, then
+            # alphabetically so the choice is deterministic.
+            keeper = min(existing, key=lambda p: (-self.get_folder_priority(p), len(p), p))
+            victims.extend(p for p in existing if p != keeper)
+        return victims
 
     def auto_prune_exact(self):
         if self.worker and self.worker.isRunning():
             QMessageBox.warning(self, "Auto-Prune", "Cannot prune while a scan is in progress.")
             return
+        if self.prune_worker and self.prune_worker.isRunning():
+            return
 
-        exact_matches = [m for m in self.matches if m.get('type') == 'EXACT']
-        if not exact_matches:
+        if not self.exact_groups:
             QMessageBox.information(self, "Auto-Prune", "No exact duplicates found.")
+            return
+
+        files_to_delete = self._select_prune_victims()
+        if not files_to_delete:
+            QMessageBox.information(self, "Auto-Prune", "No eligible files found for pruning.")
             return
 
         confirm = QMessageBox.question(
             self, "Auto-Prune Exact Duplicates",
-            f"This will move {len(exact_matches)} duplicate file(s) to Trash. Continue?",
+            f"This will move {len(files_to_delete)} duplicate file(s) to Trash, "
+            f"keeping one copy from each of {len(self.exact_groups)} group(s). Continue?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if confirm != QMessageBox.StandardButton.Yes:
-            return
-
-        files_to_delete = []
-        seen = set()
-        for match in exact_matches:
-            a = match.get('file_a')
-            b = match.get('file_b')
-            if not a or not b:
-                continue
-
-            prio_a = self.get_folder_priority(a)
-            prio_b = self.get_folder_priority(b)
-
-            # Higher priority number = keep that file; delete the other one.
-            # Tie-break: keep the file with the shorter path.
-            if prio_b > prio_a:
-                candidate = a
-            elif prio_a > prio_b:
-                candidate = b
-            else:
-                candidate = a if len(a) > len(b) else b
-
-            if candidate and candidate not in seen:
-                seen.add(candidate)
-                files_to_delete.append(candidate)
-
-        if not files_to_delete:
-            QMessageBox.information(self, "Auto-Prune", "No eligible files found for pruning.")
             return
 
         self.progress_bar.setRange(0, 0)
@@ -1163,15 +1272,13 @@ class DuplicateFinderApp(QMainWindow):
         self.prune_progress_dialog.setValue(0)
 
         self.prune_worker = AutoPruneWorker(files_to_delete)
-        self.prune_worker.progress_update.connect(lambda s: self.lbl_status.setText(s))
+        self.prune_worker.progress_update.connect(self.lbl_status.setText)
         self.prune_worker.progress_value.connect(self.update_progress_bar)
-        self.prune_worker.progress_value.connect(
-            lambda current, total: self._update_prune_progress(current, total)
-        )
-        self.prune_worker.finished.connect(self.on_prune_complete)
+        self.prune_worker.progress_value.connect(self._update_prune_progress)
+        self.prune_worker.prune_finished.connect(self.on_prune_complete)
         self.prune_worker.error.connect(self.on_error)
         self.prune_worker.aborted.connect(self.on_prune_aborted)
-        self.prune_progress_dialog.canceled.connect(lambda: self.prune_worker.stop())
+        self.prune_progress_dialog.canceled.connect(self.prune_worker.stop)
         self.prune_worker.start()
 
     def _update_prune_progress(self, current, total):
@@ -1195,15 +1302,14 @@ class DuplicateFinderApp(QMainWindow):
             except TypeError:
                 pass
 
-    def on_prune_complete(self, deleted_count):
+    def on_prune_complete(self, deleted_count, deleted_paths):
         self._close_prune_progress_dialog()
         self.progress_bar.hide()
         self.btn_scan.setEnabled(True)
         self.btn_stop.setEnabled(False)
         QMessageBox.information(self, "Complete", f"Moved {deleted_count} file(s) to Trash.")
-        self.match_list.clear()
-        self.matches = []
-        self.lbl_status.setText("Pruning complete. Please re-scan.")
+        self._purge_deleted_paths(deleted_paths)
+        self.lbl_status.setText("Pruning complete. Re-scan to refresh the index.")
 
     def on_prune_aborted(self):
         self._close_prune_progress_dialog()
@@ -1213,13 +1319,14 @@ class DuplicateFinderApp(QMainWindow):
         self.lbl_status.setText("Pruning aborted.")
 
     def persist_folder_priorities(self):
-        if self.current_db_path:
-            try:
-                db = DatabaseManager(self.current_db_path)
-                db.save_roots(self.scan_folders)
-                db.close()
-            except Exception as e:
-                print(f"Failed to save priorities: {e}")
+        if not self.current_db_path or not os.path.exists(self.current_db_path):
+            return
+        try:
+            db = DatabaseManager(self.current_db_path)
+            db.save_roots(self.scan_folders)
+            db.close()
+        except Exception as exc:
+            print(f"Failed to save priorities: {exc}")
 
     # -------------------------------------------------------------------------
     # Events
@@ -1227,10 +1334,7 @@ class DuplicateFinderApp(QMainWindow):
 
     def resizeEvent(self, event):
         if self.current_match_index != -1:
-            if self.pixmap_cache['A']:
-                self.update_image_display(self.panel_a, self.pixmap_cache['A'])
-            if self.pixmap_cache['B']:
-                self.update_image_display(self.panel_b, self.pixmap_cache['B'])
+            self._resize_timer.start()
         super().resizeEvent(event)
 
     def closeEvent(self, event):
@@ -1238,71 +1342,72 @@ class DuplicateFinderApp(QMainWindow):
             self.worker.stop()
             self.worker.wait(5000)
 
-        if hasattr(self, 'prune_worker') and self.prune_worker and self.prune_worker.isRunning():
+        if self.prune_worker and self.prune_worker.isRunning():
             self.prune_worker.stop()
             self.prune_worker.wait(5000)
 
-        if self.current_db_path:
+        if self.current_db_path and os.path.exists(self.current_db_path):
             reply = QMessageBox.question(
                 self, "Cleanup",
                 "Delete the index database file before exiting?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
             if reply == QMessageBox.StandardButton.Yes:
-                candidates = [
-                    self.current_db_path,
-                    self.current_db_path + "-shm",
-                    self.current_db_path + "-wal",
-                ]
-                for raw_path in candidates:
-                    clean_path = raw_path
-                    if clean_path.startswith('\\\\?\\'):
-                        clean_path = clean_path[4:]
-                    clean_path = os.path.abspath(clean_path)
-                    if not os.path.exists(clean_path):
-                        continue
-
-                    tried = 0
-                    while tried < 3:
-                        try:
-                            send2trash(clean_path)
-                            print(f"Sent to trash: {clean_path}")
-                            break
-                        except Exception as exc:
-                            tried += 1
-                            if tried >= 3:
-                                btn = QMessageBox.question(
-                                    self, "Failed to Move to Trash",
-                                    f"Failed to move to Recycle Bin:\n\n{clean_path}\n\n"
-                                    f"Error: {exc}\n\nChoose:",
-                                    QMessageBox.StandardButton.Retry
-                                    | QMessageBox.StandardButton.No
-                                    | QMessageBox.StandardButton.Yes,
-                                )
-                                if btn == QMessageBox.StandardButton.Retry:
-                                    tried = 0
-                                    continue
-                                elif btn == QMessageBox.StandardButton.Yes:
-                                    try:
-                                        os.remove(clean_path)
-                                        print(f"Permanently removed: {clean_path}")
-                                    except Exception as e2:
-                                        print(f"Permanent delete failed: {e2}")
-                                    break
-                                else:
-                                    break
-                            else:
-                                time.sleep(0.1)
+                self._trash_database_files()
 
         event.accept()
+
+    def _trash_database_files(self):
+        candidates = [
+            self.current_db_path,
+            self.current_db_path + "-shm",
+            self.current_db_path + "-wal",
+        ]
+        for raw_path in candidates:
+            clean_path = raw_path
+            if clean_path.startswith('\\\\?\\'):
+                clean_path = clean_path[4:]
+            clean_path = os.path.abspath(clean_path)
+            if not os.path.exists(clean_path):
+                continue
+
+            tried = 0
+            while tried < 3:
+                try:
+                    send2trash(clean_path)
+                    print(f"Sent to trash: {clean_path}")
+                    break
+                except Exception as exc:
+                    tried += 1
+                    if tried < 3:
+                        time.sleep(0.1)
+                        continue
+                    button = QMessageBox.question(
+                        self, "Failed to Move to Trash",
+                        f"Failed to move to Recycle Bin:\n\n{clean_path}\n\n"
+                        f"Error: {exc}\n\nRetry, delete permanently (Yes), or skip (No)?",
+                        QMessageBox.StandardButton.Retry
+                        | QMessageBox.StandardButton.Yes
+                        | QMessageBox.StandardButton.No,
+                    )
+                    if button == QMessageBox.StandardButton.Retry:
+                        tried = 0
+                        continue
+                    if button == QMessageBox.StandardButton.Yes:
+                        try:
+                            os.remove(clean_path)
+                            print(f"Permanently removed: {clean_path}")
+                        except Exception as remove_exc:
+                            print(f"Permanent delete failed: {remove_exc}")
+                    break
 
     def open_github(self):
         QDesktopServices.openUrl(QUrl(GITHUB_URL))
 
 
 if __name__ == "__main__":
-    # Required for ProcessPoolExecutor to work correctly in a
-    # PyInstaller-frozen executable on Windows (spawn start method).
+    # Required for ProcessPoolExecutor inside a PyInstaller-frozen executable
+    # using the spawn start method.
     multiprocessing.freeze_support()
     app = QApplication(sys.argv)
     window = DuplicateFinderApp()

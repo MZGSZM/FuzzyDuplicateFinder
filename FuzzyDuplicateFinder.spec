@@ -34,11 +34,12 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludedimports=[],
+    excludes=[],
     noarchive=False,
 )
 
-pyz = PYZ(a.pure, a.zipped_data, cipher=None)
+# cipher= was removed in PyInstaller 6.x; it is silently ignored there.
+pyz = PYZ(a.pure, a.zipped_data)
 
 exe = EXE(
     pyz,
