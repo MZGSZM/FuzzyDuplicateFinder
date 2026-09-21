@@ -102,7 +102,7 @@ The **Threads** spinbox in the top-right corner of the toolbar sets the maximum 
 
 ### Theme
 
-Choose **System**, **Light** or **Dark** from the **Theme** selector in the toolbar or from **View > Theme**. The default is System, which follows your desktop's light/dark setting and updates live when you change it. Your choice is remembered between runs.
+Choose **System**, **Light** or **Dark** from **View > Theme**. The default is System, which follows your desktop's light/dark setting and updates live when you change it. Your choice is remembered between runs.
 
 System detection uses the freedesktop settings portal on Linux (KDE Plasma, GNOME and other portal-backed desktops), and Qt's platform colour scheme on Windows and macOS. On a Linux desktop with no portal, the app falls back to the lightness of the platform palette at startup, and will not follow later changes until restarted.
 
