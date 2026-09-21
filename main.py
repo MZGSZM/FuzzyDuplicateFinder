@@ -1,3 +1,8 @@
+"""
+Fuzzy Duplicate Finder.
+
+"""
+
 import math
 import multiprocessing
 import os
@@ -7,21 +12,29 @@ import time
 from datetime import datetime
 
 import cv2
-from PyQt6.QtCore import Qt, QThread, QTimer, QUrl, pyqtSignal
-from PyQt6.QtGui import QAction, QDesktopServices, QImage, QImageReader, QPixmap
-from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QDialog, QFileDialog,
-                             QFrame, QHBoxLayout, QHeaderView, QLabel, QListWidget,
-                             QListWidgetItem, QMainWindow, QMessageBox, QProgressBar,
-                             QProgressDialog, QPushButton, QSizePolicy, QSplitter,
-                             QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
+from PyQt6.QtCore import QSize, Qt, QThread, QTimer, QUrl, pyqtSignal
+from PyQt6.QtGui import (QAction, QActionGroup, QDesktopServices, QIcon, QImage,
+                         QImageReader, QPixmap)
+from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QComboBox, QDialog,
+                             QFileDialog, QFrame, QHBoxLayout, QHeaderView, QLabel,
+                             QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
+                             QProgressBar, QProgressDialog, QPushButton, QSizePolicy,
+                             QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout,
+                             QWidget)
 from send2trash import send2trash
 
 from matcher import Matcher
 from scanner_engine import AUDIO_EXTS, IMAGE_EXTS, VIDEO_EXTS, DatabaseManager, Scanner
+from theme import MODE_LABELS, MODES, ThemeManager
 
 # Version Info
-VERSION = "1.4.0"
+VERSION = "1.5.0"
+APP_NAME = "Fuzzy Duplicate Finder"
 GITHUB_URL = "https://github.com/MZGSZM/FuzzyDuplicateFinder"
+
+# Matches assets/fuzzy-duplicate-finder.desktop. On Wayland the compositor
+# picks the taskbar icon from the desktop entry, not from setWindowIcon.
+DESKTOP_FILE_NAME = "fuzzy-duplicate-finder"
 
 # Consolidated extension sets used by the UI (kept in sync with scanner_engine)
 UI_IMAGE_EXTS = IMAGE_EXTS
@@ -36,11 +49,76 @@ PREVIEW_MAX_DIM = 2400
 
 PROGRESS_STEPS = 1000
 
-IMG_PANEL_STYLE = (
-    "background-color: #111; border: 1px solid #333; border-radius: 4px; "
-    "color: #777; font-size: 16px;"
-)
+ICON_SIZES = (16, 24, 32, 48, 64, 128, 256, 512)
 
+
+# -----------------------------------------------------------------------------
+# Resources
+# -----------------------------------------------------------------------------
+
+def resource_path(*parts):
+    """Path to a bundled resource, from source or from a PyInstaller build."""
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, *parts)
+
+
+def load_app_icon():
+    """
+    Build the application icon from the pre-rendered PNG set.
+
+    The PNGs are generated from assets/icon.svg (and icon-small.svg for 16-32
+    px) by tools/build_icons.py. Loading PNGs rather than the SVG avoids a
+    runtime dependency on Qt's SVG image plugin in frozen builds, and lets the
+    small sizes use the simplified artwork. The SVG is the fallback.
+    """
+    icon = QIcon()
+    for size in ICON_SIZES:
+        path = resource_path("assets", "icons", f"icon-{size}.png")
+        if os.path.exists(path):
+            icon.addFile(path, QSize(size, size))
+    if icon.isNull():
+        svg = resource_path("assets", "icon.svg")
+        if os.path.exists(svg):
+            icon = QIcon(svg)
+    return icon
+
+
+# -----------------------------------------------------------------------------
+# Styling helpers. Colours live in theme.py; widgets only declare what they are.
+# -----------------------------------------------------------------------------
+
+def set_variant(button, variant):
+    button.setProperty("variant", variant)
+    button.setCursor(Qt.CursorShape.PointingHandCursor)
+    return button
+
+
+def set_role(label, role):
+    label.setProperty("role", role)
+    return label
+
+
+def repolish(widget):
+    """Re-evaluate property selectors after a dynamic property change."""
+    style = widget.style()
+    style.unpolish(widget)
+    style.polish(widget)
+    widget.update()
+
+
+def set_preview_kind(label, kind):
+    if label.property("kind") != kind:
+        label.setProperty("kind", kind)
+        repolish(label)
+
+
+def make_arrow_button(text):
+    return set_variant(QPushButton(text), "arrow")
+
+
+# -----------------------------------------------------------------------------
+# Misc helpers
+# -----------------------------------------------------------------------------
 
 def format_size(size_bytes):
     if not size_bytes:
@@ -65,10 +143,14 @@ def open_file_external(filepath):
         print(f"Failed to open file: {exc}")
 
 
+# -----------------------------------------------------------------------------
+# Dialogs
+# -----------------------------------------------------------------------------
+
 class SkippedFileDialog(QDialog):
     def __init__(self, skipped_files, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Skipped Files")
+        self.setWindowTitle("Files With Issues")
         self.resize(600, 400)
         self.skipped_files = skipped_files
 
@@ -97,13 +179,6 @@ class SkippedFileDialog(QDialog):
         btn_layout.addWidget(btn_close)
         layout.addLayout(btn_layout)
 
-        self.setStyleSheet("""
-            QDialog { background-color: #333; color: #eee; }
-            QListWidget { background-color: #222; color: #ccc; border: 1px solid #444; }
-            QPushButton { background-color: #444; color: white; padding: 6px 12px; border-radius: 4px; }
-            QPushButton:hover { background-color: #555; }
-        """)
-
     def export_list(self):
         path, _ = QFileDialog.getSaveFileName(
             self, "Export Skipped Files", "skipped_files.txt", "Text Files (*.txt)"
@@ -116,6 +191,10 @@ class SkippedFileDialog(QDialog):
             except Exception as exc:
                 QMessageBox.critical(self, "Error", str(exc))
 
+
+# -----------------------------------------------------------------------------
+# Workers
+# -----------------------------------------------------------------------------
 
 class ScanAndMatchWorker(QThread):
     progress_update = pyqtSignal(str)
@@ -279,20 +358,14 @@ class AutoPruneWorker(QThread):
                 self.error.emit(str(exc))
 
 
+# -----------------------------------------------------------------------------
+# Widgets
+# -----------------------------------------------------------------------------
+
 class ThreadCountWidget(QWidget):
     """
     A down/value/up stepper that matches the folder-priority arrow buttons.
     Exposes .value() so it is a drop-in for the QSpinBox it replaces.
-    """
-
-    _ARROW_STYLE = """
-        QPushButton {
-            background-color: #555; color: #fff;
-            font-size: 10px; font-weight: bold;
-            border: 1px solid #333; padding: 0px; border-radius: 2px;
-        }
-        QPushButton:hover   { background-color: #2196f3; }
-        QPushButton:pressed { background-color: #1976d2; }
     """
 
     def __init__(self, min_val=1, max_val=8, default=4, parent=None):
@@ -305,22 +378,13 @@ class ThreadCountWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
 
-        btn_down = QPushButton("\u25bc")
-        btn_down.setMaximumWidth(20)
-        btn_down.setMaximumHeight(16)
-        btn_down.setStyleSheet(self._ARROW_STYLE)
-        btn_down.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_down = make_arrow_button("\u25bc")
         btn_down.clicked.connect(self._decrement)
 
-        self._lbl = QLabel(str(self._value))
+        self._lbl = set_role(QLabel(str(self._value)), "stepper")
         self._lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._lbl.setStyleSheet("color: white; font-weight: bold; min-width: 26px;")
 
-        btn_up = QPushButton("\u25b2")
-        btn_up.setMaximumWidth(20)
-        btn_up.setMaximumHeight(16)
-        btn_up.setStyleSheet(self._ARROW_STYLE)
-        btn_up.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_up = make_arrow_button("\u25b2")
         btn_up.clicked.connect(self._increment)
 
         layout.addWidget(btn_down)
@@ -341,10 +405,15 @@ class ThreadCountWidget(QWidget):
         return self._value
 
 
+# -----------------------------------------------------------------------------
+# Main window
+# -----------------------------------------------------------------------------
+
 class DuplicateFinderApp(QMainWindow):
-    def __init__(self):
+    def __init__(self, theme):
         super().__init__()
-        self.setWindowTitle("Fuzzy Duplicate Finder")
+        self.theme = theme
+        self.setWindowTitle(APP_NAME)
         self.resize(1400, 950)
 
         self.scan_folders = []
@@ -365,80 +434,91 @@ class DuplicateFinderApp(QMainWindow):
         self._resize_timer.setInterval(80)
         self._resize_timer.timeout.connect(self._apply_cached_pixmaps)
 
-        # Menu bar
+        self._build_menus()
+        self._build_status_bar()
+        self._build_body()
+
+        self.theme.mode_changed.connect(self._sync_theme_controls)
+        self._sync_theme_controls(self.theme.mode)
+
+    # -------------------------------------------------------------------------
+    # Construction
+    # -------------------------------------------------------------------------
+
+    def _build_menus(self):
         menubar = self.menuBar()
 
-        file_menu = menubar.addMenu("File")
-        exit_action = QAction("Exit", self)
+        file_menu = menubar.addMenu("&File")
+        exit_action = QAction("E&xit", self)
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
 
-        tools_menu = menubar.addMenu("Tools")
+        view_menu = menubar.addMenu("&View")
+        theme_menu = view_menu.addMenu("&Theme")
+        self._theme_group = QActionGroup(self)
+        self._theme_group.setExclusive(True)
+        self._theme_actions = {}
+        for mode in MODES:
+            action = QAction(MODE_LABELS[mode], self, checkable=True)
+            action.setData(mode)
+            action.triggered.connect(lambda checked, m=mode: self.theme.set_mode(m))
+            self._theme_group.addAction(action)
+            theme_menu.addAction(action)
+            self._theme_actions[mode] = action
+
+        tools_menu = menubar.addMenu("&Tools")
         prune_exact_action = QAction("Auto-Prune Exact Duplicates...", self)
         prune_exact_action.triggered.connect(self.auto_prune_exact)
         tools_menu.addAction(prune_exact_action)
 
-        # Status bar
+        help_menu = menubar.addMenu("&Help")
+        repo_action = QAction("GitHub Repository", self)
+        repo_action.triggered.connect(self.open_github)
+        help_menu.addAction(repo_action)
+        about_action = QAction(f"&About {APP_NAME}", self)
+        about_action.triggered.connect(self.show_about)
+        help_menu.addAction(about_action)
+
+    def _build_status_bar(self):
         self.status_bar = self.statusBar()
-        self.lbl_status = QLabel("Ready")
-        self.lbl_status.setStyleSheet("color: #aaa; margin-left: 10px; font-weight: bold;")
+        self.lbl_status = set_role(QLabel("Ready"), "status")
         self.status_bar.addWidget(self.lbl_status)
 
-        self.lbl_version = QLabel(f"v{VERSION}")
-        self.lbl_version.setStyleSheet("color: #666; font-size: 10px; margin-right: 10px;")
+        self.lbl_version = set_role(QLabel(f"v{VERSION}"), "version")
         self.lbl_version.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.lbl_version.setToolTip(GITHUB_URL)
         self.lbl_version.mousePressEvent = lambda event: self.open_github()
         self.status_bar.addPermanentWidget(self.lbl_version)
 
-        # Main layout
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        main_layout = QVBoxLayout(central_widget)
-        main_layout.setContentsMargins(5, 5, 5, 5)
+    def _build_toolbar(self):
+        toolbar = QFrame()
+        toolbar.setObjectName("toolbar")
+        row = QHBoxLayout(toolbar)
+        row.setContentsMargins(8, 6, 8, 6)
+        row.setSpacing(6)
 
-        v_splitter = QSplitter(Qt.Orientation.Vertical)
-
-        # Top panel
-        top_container = QWidget()
-        top_layout = QVBoxLayout(top_container)
-        top_layout.setContentsMargins(0, 0, 0, 0)
-
-        btn_row = QHBoxLayout()
-        btn_add_folder = QPushButton(" + Add Folder ")
+        btn_add_folder = set_variant(QPushButton(" + Add Folder "), "neutral")
         btn_add_folder.clicked.connect(self.add_folder)
-        self.style_button(btn_add_folder, bg="#444")
 
-        btn_clear_folders = QPushButton(" Clear List ")
+        btn_clear_folders = set_variant(QPushButton(" Clear List "), "neutral")
         btn_clear_folders.clicked.connect(self.clear_folders)
-        self.style_button(btn_clear_folders, bg="#444")
 
-        btn_load_index = QPushButton(" Load Index... ")
+        btn_load_index = set_variant(QPushButton(" Load Index... "), "neutral")
         btn_load_index.clicked.connect(self.load_index)
-        self.style_button(btn_load_index, bg="#444")
 
-        self.btn_scan = QPushButton("  START SCAN  ")
+        self.btn_scan = set_variant(QPushButton("  START SCAN  "), "primary")
         self.btn_scan.setEnabled(False)
         self.btn_scan.clicked.connect(self.start_scan)
-        self.style_button(self.btn_scan, bg="#007acc")
 
-        self.btn_stop = QPushButton("  STOP  ")
+        self.btn_stop = set_variant(QPushButton("  STOP  "), "danger")
         self.btn_stop.setEnabled(False)
         self.btn_stop.clicked.connect(self.stop_scan)
-        self.style_button(self.btn_stop, bg="#d32f2f")
 
-        self.btn_skipped = QPushButton("0 Skipped")
-        self.btn_skipped.setStyleSheet("""
-            QPushButton { background: transparent; color: #d32f2f;
-                          text-decoration: underline; border: none;
-                          font-weight: bold; text-align: left; }
-            QPushButton:hover { color: #ff6659; }
-        """)
-        self.btn_skipped.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_skipped = set_variant(QPushButton("0 Skipped"), "warn-link")
         self.btn_skipped.clicked.connect(self.show_skipped_dialog)
         self.btn_skipped.hide()
 
-        lbl_threads = QLabel("Threads:")
-        lbl_threads.setStyleSheet("color: #aaa; font-size: 12px;")
+        lbl_threads = set_role(QLabel("Threads:"), "muted")
 
         cpu_count = os.cpu_count() or 4
         self.spin_workers = ThreadCountWidget(
@@ -453,39 +533,60 @@ class DuplicateFinderApp(QMainWindow):
             "your core count."
         )
 
-        btn_row.addWidget(btn_add_folder)
-        btn_row.addWidget(btn_clear_folders)
-        btn_row.addWidget(btn_load_index)
-        btn_row.addSpacing(20)
-        btn_row.addWidget(self.btn_scan)
-        btn_row.addWidget(self.btn_stop)
-        btn_row.addWidget(self.btn_skipped)
-        btn_row.addStretch()
-        btn_row.addWidget(lbl_threads)
-        btn_row.addWidget(self.spin_workers)
+        lbl_theme = set_role(QLabel("Theme:"), "muted")
+        self.theme_combo = QComboBox()
+        for mode in MODES:
+            self.theme_combo.addItem(MODE_LABELS[mode], mode)
+        self.theme_combo.setToolTip("System follows your desktop's light/dark setting.")
+        self.theme_combo.currentIndexChanged.connect(
+            lambda index: self.theme.set_mode(self.theme_combo.itemData(index))
+        )
+
+        row.addWidget(btn_add_folder)
+        row.addWidget(btn_clear_folders)
+        row.addWidget(btn_load_index)
+        row.addSpacing(20)
+        row.addWidget(self.btn_scan)
+        row.addWidget(self.btn_stop)
+        row.addWidget(self.btn_skipped)
+        row.addStretch()
+        row.addWidget(lbl_threads)
+        row.addWidget(self.spin_workers)
+        row.addSpacing(16)
+        row.addWidget(lbl_theme)
+        row.addWidget(self.theme_combo)
+        return toolbar
+
+    def _build_body(self):
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        main_layout = QVBoxLayout(central_widget)
+        main_layout.setContentsMargins(6, 6, 6, 6)
+
+        v_splitter = QSplitter(Qt.Orientation.Vertical)
+        v_splitter.setHandleWidth(1)
+
+        # Top panel
+        top_container = QWidget()
+        top_layout = QVBoxLayout(top_container)
+        top_layout.setContentsMargins(0, 0, 0, 6)
+        top_layout.setSpacing(6)
+
+        top_layout.addWidget(self._build_toolbar())
 
         self.folder_table = QTableWidget()
         self.folder_table.setColumnCount(2)
         self.folder_table.setHorizontalHeaderLabels(["Folder Path", "Priority"])
         self.folder_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.folder_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
-        self.folder_table.setColumnWidth(1, 80)
+        self.folder_table.setColumnWidth(1, 90)
+        self.folder_table.verticalHeader().setVisible(False)
         self.folder_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.folder_table.setStyleSheet(
-            "QTableWidget { background-color: #222; color: #eee; border: 1px solid #444; } "
-            "QHeaderView::section { background-color: #333; color: #ddd; }"
-        )
-
-        top_layout.addLayout(btn_row)
         top_layout.addWidget(self.folder_table)
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setFixedHeight(5)
         self.progress_bar.setTextVisible(False)
-        self.progress_bar.setStyleSheet(
-            "QProgressBar { background: #222; border: none; } "
-            "QProgressBar::chunk { background: #007acc; }"
-        )
         self.progress_bar.hide()
         top_layout.addWidget(self.progress_bar)
 
@@ -497,24 +598,22 @@ class DuplicateFinderApp(QMainWindow):
         bottom_layout.setContentsMargins(0, 0, 0, 0)
 
         h_splitter = QSplitter(Qt.Orientation.Horizontal)
-        h_splitter.setHandleWidth(2)
+        h_splitter.setHandleWidth(1)
 
         self.match_list = QListWidget()
+        self.match_list.setObjectName("matchList")
         self.match_list.setFrameShape(QFrame.Shape.NoFrame)
-        self.match_list.setStyleSheet("""
-            QListWidget { background-color: #222; color: #ddd; font-size: 13px; }
-            QListWidget::item { padding: 8px; border-bottom: 1px solid #333; }
-            QListWidget::item:selected { background-color: #383838;
-                                         border-left: 3px solid #007acc; color: white; }
-        """)
         self.match_list.currentRowChanged.connect(self.load_match_details)
         h_splitter.addWidget(self.match_list)
 
         comparison_widget = QWidget()
-        comparison_widget.setStyleSheet("background-color: #1e1e1e;")
+        comparison_widget.setObjectName("comparePane")
+        # Needed for a QWidget subclass-less container to paint its background.
+        comparison_widget.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         comp_layout = QVBoxLayout(comparison_widget)
 
         preview_splitter = QSplitter(Qt.Orientation.Horizontal)
+        preview_splitter.setHandleWidth(1)
         self.panel_a = self.create_file_panel("Original / File A")
         self.panel_b = self.create_file_panel("Duplicate / File B")
         preview_splitter.addWidget(self.panel_a['container'])
@@ -522,31 +621,22 @@ class DuplicateFinderApp(QMainWindow):
         comp_layout.addWidget(preview_splitter, stretch=1)
 
         action_frame = QFrame()
-        action_frame.setStyleSheet(
-            "background-color: #252525; border-top: 1px solid #3e3e3e;"
-        )
+        action_frame.setObjectName("actionBar")
         action_layout = QHBoxLayout(action_frame)
 
-        self.lbl_score = QLabel("0%")
-        self.lbl_score.setStyleSheet(
-            "font-size: 28px; font-weight: bold; color: #4caf50; margin-right: 20px;"
-        )
+        self.lbl_score = set_role(QLabel("0%"), "score")
 
-        btn_del_a = QPushButton("Delete File A")
+        btn_del_a = set_variant(QPushButton("Delete File A"), "danger")
         btn_del_a.clicked.connect(lambda: self.delete_file("A"))
-        self.style_button(btn_del_a, bg="#d32f2f")
 
-        btn_del_both = QPushButton("Delete Both Files")
+        btn_del_both = set_variant(QPushButton("Delete Both Files"), "danger")
         btn_del_both.clicked.connect(self.delete_both_files)
-        self.style_button(btn_del_both, bg="#d32f2f")
 
-        btn_keep = QPushButton("Skip / Keep Both")
+        btn_keep = set_variant(QPushButton("Skip / Keep Both"), "neutral")
         btn_keep.clicked.connect(self.next_match)
-        self.style_button(btn_keep, bg="#555")
 
-        btn_del_b = QPushButton("Delete File B")
+        btn_del_b = set_variant(QPushButton("Delete File B"), "danger")
         btn_del_b.clicked.connect(lambda: self.delete_file("B"))
-        self.style_button(btn_del_b, bg="#d32f2f")
 
         action_layout.addStretch()
         action_layout.addWidget(btn_del_a)
@@ -566,75 +656,42 @@ class DuplicateFinderApp(QMainWindow):
 
         bottom_layout.addWidget(h_splitter)
         v_splitter.addWidget(bottom_container)
-        v_splitter.setSizes([200, 700])
+        v_splitter.setSizes([220, 700])
 
         main_layout.addWidget(v_splitter)
-
-    # -------------------------------------------------------------------------
-    # UI helpers
-    # -------------------------------------------------------------------------
-
-    def style_button(self, btn, bg):
-        btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        hover_map = {
-            "#d32f2f": "#ef5350",
-            "#007acc": "#2196f3",
-            "#444": "#666",
-            "#555": "#777",
-        }
-        hover_color = hover_map.get(bg, bg)
-        btn.setStyleSheet(
-            f"QPushButton {{ background-color: {bg}; color: white; padding: 8px 16px; "
-            f"font-weight: bold; border-radius: 4px; border: none; }} "
-            f"QPushButton:hover {{ background-color: {hover_color}; }} "
-            f"QPushButton:pressed {{ background-color: {bg}; }} "
-            f"QPushButton:disabled {{ background-color: #333; color: #555; }}"
-        )
 
     def create_file_panel(self, title):
         container = QWidget()
         layout = QVBoxLayout(container)
         layout.setContentsMargins(10, 10, 10, 10)
 
-        lbl_title = QLabel(title)
+        lbl_title = set_role(QLabel(title), "panelTitle")
         lbl_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl_title.setStyleSheet("font-weight: bold; color: #888;")
         layout.addWidget(lbl_title)
 
         lbl_img = QLabel()
+        lbl_img.setObjectName("preview")
+        lbl_img.setProperty("kind", "image")
         lbl_img.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl_img.setStyleSheet(IMG_PANEL_STYLE)
         lbl_img.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         lbl_img.setScaledContents(False)
         layout.addWidget(lbl_img)
         layout.setStretchFactor(lbl_img, 1)
 
         meta_frame = QFrame()
-        meta_frame.setStyleSheet(
-            "background-color: #2b2b2b; border-radius: 4px; margin-top: 10px;"
-        )
+        meta_frame.setObjectName("metaFrame")
         meta_layout = QVBoxLayout(meta_frame)
 
-        lbl_filename = QLabel("Filename")
-        lbl_filename.setStyleSheet("font-size: 14px; font-weight: bold; color: white;")
+        lbl_filename = set_role(QLabel("Filename"), "filename")
         lbl_filename.setWordWrap(True)
 
-        lbl_path = QLabel("Path")
-        lbl_path.setStyleSheet("font-size: 11px; color: #aaa;")
+        lbl_path = set_role(QLabel("Path"), "path")
         lbl_path.setWordWrap(True)
 
-        lbl_details = QLabel("Details")
-        lbl_details.setStyleSheet("font-size: 11px; color: #ccc; margin-top: 4px;")
+        lbl_details = set_role(QLabel("Details"), "details")
+        lbl_dates = set_role(QLabel("Dates"), "dates")
 
-        lbl_dates = QLabel("Dates")
-        lbl_dates.setStyleSheet("font-size: 11px; color: #888;")
-
-        btn_open = QPushButton("Open in Viewer")
-        btn_open.setStyleSheet(
-            "background: transparent; color: #007acc; "
-            "text-align: left; padding: 0; border: none;"
-        )
-        btn_open.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_open = set_variant(QPushButton("Open in Viewer"), "link")
 
         meta_layout.addWidget(lbl_filename)
         meta_layout.addWidget(lbl_path)
@@ -653,6 +710,21 @@ class DuplicateFinderApp(QMainWindow):
             "btn_open": btn_open,
             "filepath": None,
         }
+
+    # -------------------------------------------------------------------------
+    # Theme
+    # -------------------------------------------------------------------------
+
+    def _sync_theme_controls(self, mode):
+        """Keep the menu and the toolbar selector in step with each other."""
+        action = self._theme_actions.get(mode)
+        if action is not None:
+            action.setChecked(True)
+        index = self.theme_combo.findData(mode)
+        if index >= 0 and index != self.theme_combo.currentIndex():
+            self.theme_combo.blockSignals(True)
+            self.theme_combo.setCurrentIndex(index)
+            self.theme_combo.blockSignals(False)
 
     # -------------------------------------------------------------------------
     # Folder management
@@ -701,32 +773,14 @@ class DuplicateFinderApp(QMainWindow):
 
             priority_widget = QWidget()
             priority_layout = QHBoxLayout(priority_widget)
-            priority_layout.setContentsMargins(0, 0, 0, 0)
+            priority_layout.setContentsMargins(4, 0, 4, 0)
             priority_layout.setSpacing(2)
 
-            lbl_value = QLabel(str(folder_data['priority']))
+            lbl_value = set_role(QLabel(str(folder_data['priority'])), "stepper")
             lbl_value.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            lbl_value.setStyleSheet("color: white; font-weight: bold; min-width: 20px;")
 
-            arrow_style = """
-                QPushButton {
-                    background-color: #555; color: #fff;
-                    font-size: 10px; font-weight: bold;
-                    border: 1px solid #333; padding: 0px; border-radius: 2px;
-                }
-                QPushButton:hover { background-color: #2196f3; }
-                QPushButton:pressed { background-color: #1976d2; }
-            """
-
-            btn_up = QPushButton("\u25b2")
-            btn_up.setMaximumWidth(20)
-            btn_up.setMaximumHeight(16)
-            btn_up.setStyleSheet(arrow_style)
-
-            btn_down = QPushButton("\u25bc")
-            btn_down.setMaximumWidth(20)
-            btn_down.setMaximumHeight(16)
-            btn_down.setStyleSheet(arrow_style)
+            btn_up = make_arrow_button("\u25b2")
+            btn_down = make_arrow_button("\u25bc")
 
             btn_up.folder_index = i
             btn_up.priority_label = lbl_value
@@ -856,7 +910,9 @@ class DuplicateFinderApp(QMainWindow):
     def on_scan_phase_complete(self, skipped_list):
         self.skipped_files = skipped_list
         if skipped_list:
-            self.btn_skipped.setText(f"{len(skipped_list)} Files With Issues (View)")
+            count = len(skipped_list)
+            noun = "File" if count == 1 else "Files"
+            self.btn_skipped.setText(f"{count} {noun} With Issues (View)")
             self.btn_skipped.show()
 
     def show_skipped_dialog(self):
@@ -951,13 +1007,20 @@ class DuplicateFinderApp(QMainWindow):
             return None, res_str
         return QPixmap.fromImage(image), res_str
 
+    def _clear_panel(self, panel, cache_key):
+        panel['filepath'] = None
+        self.pixmap_cache[cache_key] = None
+        set_preview_kind(panel['img'], "image")
+        panel['img'].setPixmap(QPixmap())
+        panel['img'].setText("")
+        for key in ('filename', 'path', 'details', 'dates'):
+            panel[key].setText("")
+
     def load_file_to_panel(self, panel, filepath, cache_key):
         panel['filepath'] = filepath
         self.pixmap_cache[cache_key] = None
 
-        # Reset per-file: the audio and generic branches below change the font
-        # size, and leaving that applied corrupts every later preview.
-        panel['img'].setStyleSheet(IMG_PANEL_STYLE)
+        set_preview_kind(panel['img'], "image")
         panel['img'].setPixmap(QPixmap())
         panel['img'].setText("")
 
@@ -1050,12 +1113,12 @@ class DuplicateFinderApp(QMainWindow):
                     cap.release()
 
         elif ext in UI_AUDIO_EXTS:
+            set_preview_kind(panel['img'], "audio")
             panel['img'].setText("Audio File")
-            panel['img'].setStyleSheet(IMG_PANEL_STYLE + "font-size: 28px;")
 
         else:
+            set_preview_kind(panel['img'], "generic")
             panel['img'].setText(f"{ext.upper()} File")
-            panel['img'].setStyleSheet(IMG_PANEL_STYLE + "font-size: 20px;")
 
         details = f"Size: {size_str}"
         if res_str:
@@ -1165,16 +1228,8 @@ class DuplicateFinderApp(QMainWindow):
         if not self.matches:
             self._rebuild_match_list(-1)
             self.lbl_score.setText("0%")
-            for panel, key in ((self.panel_a, 'A'), (self.panel_b, 'B')):
-                panel['filepath'] = None
-                self.pixmap_cache[key] = None
-                panel['img'].setStyleSheet(IMG_PANEL_STYLE)
-                panel['img'].setPixmap(QPixmap())
-                panel['img'].setText("")
-                panel['filename'].setText("")
-                panel['path'].setText("")
-                panel['details'].setText("")
-                panel['dates'].setText("")
+            self._clear_panel(self.panel_a, 'A')
+            self._clear_panel(self.panel_b, 'B')
             QMessageBox.information(self, "Done", "No more matches!")
             return
 
@@ -1404,12 +1459,35 @@ class DuplicateFinderApp(QMainWindow):
     def open_github(self):
         QDesktopServices.openUrl(QUrl(GITHUB_URL))
 
+    def show_about(self):
+        QMessageBox.about(
+            self, f"About {APP_NAME}",
+            f"<h3>{APP_NAME}</h3>"
+            f"<p>Version {VERSION}</p>"
+            f"<p>Find exact and visually or acoustically similar duplicate files.</p>"
+            f"<p><a href='{GITHUB_URL}'>{GITHUB_URL}</a></p>",
+        )
 
-if __name__ == "__main__":
+
+def main():
     # Required for ProcessPoolExecutor inside a PyInstaller-frozen executable
     # using the spawn start method.
     multiprocessing.freeze_support()
+
     app = QApplication(sys.argv)
-    window = DuplicateFinderApp()
+    app.setApplicationName(APP_NAME)
+    app.setApplicationVersion(VERSION)
+    app.setOrganizationName("FuzzyDuplicateFinder")
+    app.setDesktopFileName(DESKTOP_FILE_NAME)
+    app.setWindowIcon(load_app_icon())
+
+    theme = ThemeManager(app)
+    theme.apply()
+
+    window = DuplicateFinderApp(theme)
     window.show()
     sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()
