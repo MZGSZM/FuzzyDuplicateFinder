@@ -1,143 +1,460 @@
-# Fuzzy Duplicate Finder
+"""
+Light/dark theming for Fuzzy Duplicate Finder.
 
-A cross-platform desktop tool for finding both exact and visually/acoustically similar duplicate files across one or more folders. Built with Python and PyQt6.
+Every colour in the UI comes from one of the token sets below. Widgets never
+set colours themselves; they carry a `variant` (buttons) or `role` (labels)
+property, or an objectName, and a single application stylesheet generated from
+the active tokens styles them. Switching theme is therefore one setStyleSheet
+call, and there is no widget left behind in the wrong theme.
 
-![Main interface showing two duplicate images side by side with a similarity percentage, file details, and delete/keep buttons](screens/main-pretty.png)
+System theme detection, in order of preference:
 
----
+  1. The freedesktop settings portal (Linux). This is what KDE Plasma and GNOME
+     actually expose, and it works regardless of which Qt platform theme
+     plugin happens to be loaded. The PyQt wheels do not ship KDE's plugin, so
+     Qt's own hint is often "Unknown" on Plasma.
+  2. Qt's QStyleHints.colorScheme() (Windows, macOS, and Linux desktops where
+     the platform theme reports it).
+  3. The lightness of the platform palette captured at startup, before this
+     module replaces it.
 
-## Features
+Both the portal and Qt are watched for live changes, so "System" follows the
+desktop when the user flips it.
 
-- **Exact duplicate detection** via MD5 hashing -- finds byte-for-byte identical files instantly
-- **Fuzzy / similar file detection** using perceptual hashing for images and video, chroma fingerprinting for audio, and filename/size scoring as secondary signals
-- **Percentage similarity score** shown for every match so you can judge confidence at a glance
-- **Side-by-side preview** with file metadata: size, resolution, duration, created/modified dates
-- **Safe deletion** -- files are always moved to the system Trash/Recycle Bin, never permanently deleted without a second prompt
-- **Delete one, delete both, or skip** controls per match pair
-- **Auto-prune exact duplicates** in bulk using configurable folder priority weights
-- **Persistent index database** -- save and reload a scan so you don't have to re-hash everything on every run
-- **Skipped files log** with one-click export to a text file, listing anything that couldn't be processed
-- **Configurable thread count** -- set the number of worker threads from the UI to match your hardware
-- **Multi-folder scanning** with per-folder priority settings for the auto-prune decision
+Contrast: text/background pairs in both themes meet WCAG AA (4.5:1) for body
+text. Disabled states are deliberately lower contrast, as is conventional.
+"""
 
----
+import sys
 
-## Supported File Types
+from PyQt6.QtCore import QObject, QSettings, Qt, pyqtSignal, pyqtSlot
+from PyQt6.QtGui import QColor, QPalette
 
-| Category | Extensions |
-|----------|-----------|
-| Images | `.jpg` `.jpeg` `.png` `.bmp` `.gif` `.webp` `.tiff` `.tif` `.psd` `.raw` |
-| Video | `.mp4` `.avi` `.mkv` `.mov` `.wmv` `.flv` `.m4v` `.webm` `.ts` `.mts` `.3gp` |
-| Audio | `.mp3` `.wav` `.flac` `.m4a` `.aac` `.ogg` `.wma` |
-| Text / Code | `.txt` `.md` `.py` `.js` `.json` `.html` `.css` `.c` `.cpp` |
+try:
+    from PyQt6.QtDBus import QDBusConnection, QDBusInterface, QDBusMessage
+    _HAVE_DBUS = True
+except ImportError:  # Windows and macOS wheels
+    _HAVE_DBUS = False
 
----
 
-## Installation
+MODES = ("system", "light", "dark")
+MODE_LABELS = {"system": "System", "light": "Light", "dark": "Dark"}
 
-### Compiled binary (recommended)
+THEMES = {
+    "dark": {
+        "window":         "#1e1e1e",
+        "surface":        "#252526",
+        "surface_alt":    "#2b2b2c",
+        "input":          "#1f1f1f",
+        "preview":        "#141414",
+        "border":         "#3c3c3c",
+        "divider":        "#303030",
+        "text":           "#e6e6e6",
+        "text_muted":     "#b3b3b3",
+        "text_faint":     "#8c8c8c",
+        "accent":         "#007acc",
+        "accent_hover":   "#006bb3",
+        "accent_pressed": "#005a96",
+        "on_accent":      "#ffffff",
+        "danger":         "#d32f2f",
+        "danger_hover":   "#bd2828",
+        "danger_pressed": "#a02222",
+        "on_danger":      "#ffffff",
+        "neutral":        "#3a3d41",
+        "neutral_hover":  "#4a4e54",
+        "neutral_pressed": "#2f3236",
+        "on_neutral":     "#f0f0f0",
+        "disabled_bg":    "#2d2d2d",
+        "disabled_text":  "#6e6e6e",
+        "success":        "#5cc162",
+        "warning_text":   "#ff6b61",
+        "selection":      "#37373d",
+        "link":           "#4aa8ff",
+        "progress_track": "#2a2a2a",
+        "tooltip":        "#333337",
+    },
+    "light": {
+        "window":         "#eef0f3",
+        "surface":        "#ffffff",
+        "surface_alt":    "#f6f7f9",
+        "input":          "#ffffff",
+        "preview":        "#e6e9ed",
+        "border":         "#c5cbd3",
+        "divider":        "#e1e4e8",
+        "text":           "#1b1f24",
+        "text_muted":     "#4b5563",
+        "text_faint":     "#5f6773",
+        "accent":         "#0063b1",
+        "accent_hover":   "#00548f",
+        "accent_pressed": "#004575",
+        "on_accent":      "#ffffff",
+        "danger":         "#c62828",
+        "danger_hover":   "#a82121",
+        "danger_pressed": "#8e1b1b",
+        "on_danger":      "#ffffff",
+        "neutral":        "#e3e6ea",
+        "neutral_hover":  "#d4d8de",
+        "neutral_pressed": "#c6cbd2",
+        "on_neutral":     "#1b1f24",
+        "disabled_bg":    "#e6e8eb",
+        "disabled_text":  "#8d949e",
+        "success":        "#2e7d32",
+        "warning_text":   "#b3261e",
+        "selection":      "#dcebfb",
+        "link":           "#0063b1",
+        "progress_track": "#dde1e6",
+        "tooltip":        "#ffffff",
+    },
+}
 
-Download the latest release for your OS from the [Releases page](/../../releases/latest). No dependencies required -- just run the binary.
 
-### From source
+def build_palette(t):
+    """QPalette for native-drawn elements: menus, dialogs, scrollbars, focus."""
+    p = QPalette()
+    c = QColor
+    R = QPalette.ColorRole
 
-**Requirements:** Python 3.10+
+    p.setColor(R.Window, c(t["window"]))
+    p.setColor(R.WindowText, c(t["text"]))
+    p.setColor(R.Base, c(t["input"]))
+    p.setColor(R.AlternateBase, c(t["surface_alt"]))
+    p.setColor(R.ToolTipBase, c(t["tooltip"]))
+    p.setColor(R.ToolTipText, c(t["text"]))
+    p.setColor(R.PlaceholderText, c(t["text_faint"]))
+    p.setColor(R.Text, c(t["text"]))
+    p.setColor(R.Button, c(t["neutral"]))
+    p.setColor(R.ButtonText, c(t["on_neutral"]))
+    p.setColor(R.BrightText, c(t["warning_text"]))
+    p.setColor(R.Highlight, c(t["accent"]))
+    p.setColor(R.HighlightedText, c(t["on_accent"]))
+    p.setColor(R.Link, c(t["link"]))
+    p.setColor(R.LinkVisited, c(t["link"]))
+    p.setColor(R.Light, c(t["surface"]).lighter(115))
+    p.setColor(R.Midlight, c(t["surface_alt"]))
+    p.setColor(R.Mid, c(t["border"]))
+    p.setColor(R.Dark, c(t["border"]).darker(130))
+    p.setColor(R.Shadow, QColor(0, 0, 0))
 
-```bash
-git clone https://github.com/MZGSZM/FuzzyDuplicateFinder
-cd FuzzyDuplicateFinder
-pip install -r requirements.txt
-python main.py
-```
+    disabled = QPalette.ColorGroup.Disabled
+    for role in (R.Text, R.WindowText, R.ButtonText):
+        p.setColor(disabled, role, c(t["disabled_text"]))
+    p.setColor(disabled, R.Button, c(t["disabled_bg"]))
+    p.setColor(disabled, R.Highlight, c(t["border"]))
+    return p
 
-**Dependencies installed by the above:**
 
-- [PyQt6](https://pypi.org/project/PyQt6/) -- UI framework
-- [Pillow](https://pypi.org/project/Pillow/) -- image loading and hashing
-- [imagehash](https://pypi.org/project/imagehash/) -- perceptual hashing
-- [opencv-python](https://pypi.org/project/opencv-python/) -- video frame extraction
-- [librosa](https://pypi.org/project/librosa/) -- audio fingerprinting
-- [numpy](https://pypi.org/project/numpy/) -- numerical operations
-- [send2trash](https://pypi.org/project/send2trash/) -- cross-platform trash/recycle bin support
+def build_stylesheet(t):
+    return f"""
+/* ---- base ---------------------------------------------------------- */
+QMainWindow, QDialog {{ background-color: {t['window']}; color: {t['text']}; }}
+QWidget {{ color: {t['text']}; }}
+QToolTip {{
+    background-color: {t['tooltip']}; color: {t['text']};
+    border: 1px solid {t['border']}; padding: 4px 6px;
+}}
 
----
+QMenuBar {{ background-color: {t['surface']}; color: {t['text']};
+            border-bottom: 1px solid {t['border']}; }}
+QMenuBar::item {{ background: transparent; padding: 4px 10px; }}
+QMenuBar::item:selected {{ background-color: {t['neutral']}; }}
+QMenu {{ background-color: {t['surface']}; color: {t['text']};
+         border: 1px solid {t['border']}; padding: 4px 0; }}
+QMenu::item {{ padding: 5px 24px 5px 24px; }}
+QMenu::item:selected {{ background-color: {t['selection']}; color: {t['text']}; }}
+QMenu::separator {{ height: 1px; background: {t['divider']}; margin: 4px 8px; }}
 
-## Usage
+QStatusBar {{ background-color: {t['surface']}; color: {t['text_muted']};
+              border-top: 1px solid {t['border']}; }}
+QStatusBar::item {{ border: none; }}
 
-### Basic workflow
+QSplitter::handle {{ background-color: {t['border']}; }}
 
-1. Click **+ Add Folder** to add one or more directories to scan
-2. Click **START SCAN** -- the engine indexes all supported files (Phase 1) then runs duplicate analysis (Phase 2)
-3. Browse the match list on the left. Click any entry to preview both files side by side
-4. Use **Delete File A**, **Delete File B**, or **Delete Both Files** to send unwanted copies to the Trash, or **Skip / Keep Both** to move on without deleting
+/* ---- toolbar ------------------------------------------------------- */
+QFrame#toolbar {{
+    background-color: {t['surface']};
+    border: 1px solid {t['border']}; border-radius: 6px;
+}}
 
-### Loading a previous scan
+/* ---- buttons --------------------------------------------------------
+   Unstyled buttons (message boxes, dialogs) get the neutral treatment so
+   they stay recognisable as buttons in both themes. */
+QPushButton {{
+    background-color: {t['neutral']}; color: {t['on_neutral']};
+    border: 1px solid {t['border']}; border-radius: 4px; padding: 5px 14px;
+}}
+QPushButton:hover {{ background-color: {t['neutral_hover']}; }}
+QPushButton:pressed {{ background-color: {t['neutral_pressed']}; }}
+QPushButton:disabled {{ background-color: {t['disabled_bg']}; color: {t['disabled_text']};
+                        border-color: {t['disabled_bg']}; }}
+QPushButton:focus {{ outline: none; }}
 
-Click **Load Index...** and select a `.db` file from a prior scan. The matching phase runs immediately without re-hashing files that haven't changed.
+QPushButton[variant="primary"], QPushButton[variant="danger"],
+QPushButton[variant="neutral"] {{
+    padding: 8px 16px; font-weight: bold; border: none;
+}}
+QPushButton[variant="primary"] {{ background-color: {t['accent']}; color: {t['on_accent']}; }}
+QPushButton[variant="primary"]:hover {{ background-color: {t['accent_hover']}; }}
+QPushButton[variant="primary"]:pressed {{ background-color: {t['accent_pressed']}; }}
 
-### Auto-pruning exact duplicates
+QPushButton[variant="danger"] {{ background-color: {t['danger']}; color: {t['on_danger']}; }}
+QPushButton[variant="danger"]:hover {{ background-color: {t['danger_hover']}; }}
+QPushButton[variant="danger"]:pressed {{ background-color: {t['danger_pressed']}; }}
 
-Go to **Tools > Auto-Prune Exact Duplicates** to automatically remove lower-priority copies of all byte-for-byte identical files in one pass. The file to keep is determined by folder priority (see below). A confirmation dialog shows the count before anything is deleted.
+QPushButton[variant="neutral"] {{ background-color: {t['neutral']}; color: {t['on_neutral']}; }}
+QPushButton[variant="neutral"]:hover {{ background-color: {t['neutral_hover']}; }}
+QPushButton[variant="neutral"]:pressed {{ background-color: {t['neutral_pressed']}; }}
 
-### Thread count
+QPushButton[variant="primary"]:disabled, QPushButton[variant="danger"]:disabled,
+QPushButton[variant="neutral"]:disabled {{
+    background-color: {t['disabled_bg']}; color: {t['disabled_text']};
+}}
 
-The **Threads** spinbox in the top-right corner of the toolbar sets the maximum number of worker threads used during both the scan and the matching phases. It defaults to your system's logical CPU count. Raise it on machines with many cores and fast storage; lower it if you want to leave headroom for other work while a scan runs.
+QPushButton[variant="arrow"] {{
+    background-color: {t['neutral']}; color: {t['on_neutral']};
+    font-size: 9px; font-weight: bold; padding: 0;
+    border: 1px solid {t['border']}; border-radius: 3px;
+    min-width: 18px; max-width: 18px; min-height: 16px; max-height: 16px;
+}}
+QPushButton[variant="arrow"]:hover {{ background-color: {t['accent']}; color: {t['on_accent']};
+                                      border-color: {t['accent']}; }}
+QPushButton[variant="arrow"]:pressed {{ background-color: {t['accent_pressed']};
+                                        color: {t['on_accent']}; }}
 
----
+QPushButton[variant="link"] {{
+    background: transparent; color: {t['link']}; border: none;
+    padding: 0; text-align: left;
+}}
+QPushButton[variant="link"]:hover {{ text-decoration: underline; background: transparent; }}
 
-## Folder priorities and auto-prune logic
+QPushButton[variant="warn-link"] {{
+    background: transparent; color: {t['warning_text']}; border: none;
+    font-weight: bold; text-decoration: underline; padding: 0 6px; text-align: left;
+}}
+QPushButton[variant="warn-link"]:hover {{ background: transparent; color: {t['danger_hover']}; }}
 
-When scanning multiple folders, each folder is assigned a **priority** (default: 10). Use the ▲ / ▼ arrows in the folder table to adjust.
+/* ---- combo box ----------------------------------------------------- */
+QComboBox {{
+    background-color: {t['input']}; color: {t['text']};
+    border: 1px solid {t['border']}; border-radius: 4px; padding: 3px 8px;
+    min-width: 72px;
+}}
+QComboBox:hover {{ border-color: {t['accent']}; }}
+QComboBox QAbstractItemView {{
+    background-color: {t['surface']}; color: {t['text']};
+    border: 1px solid {t['border']};
+    selection-background-color: {t['selection']}; selection-color: {t['text']};
+}}
 
-During auto-prune, for any pair of exact duplicates:
+/* ---- labels -------------------------------------------------------- */
+QLabel[role="muted"] {{ color: {t['text_muted']}; }}
+QLabel[role="status"] {{ color: {t['text_muted']}; font-weight: bold; margin-left: 10px; }}
+QLabel[role="version"] {{ color: {t['text_faint']}; font-size: 10px; margin-right: 10px; }}
+QLabel[role="version"]:hover {{ color: {t['link']}; }}
+QLabel[role="stepper"] {{ color: {t['text']}; font-weight: bold; min-width: 24px; }}
+QLabel[role="panelTitle"] {{ color: {t['text_muted']}; font-weight: bold; }}
+QLabel[role="filename"] {{ color: {t['text']}; font-size: 14px; font-weight: bold; }}
+QLabel[role="path"] {{ color: {t['text_muted']}; font-size: 11px; }}
+QLabel[role="details"] {{ color: {t['text']}; font-size: 11px; margin-top: 4px; }}
+QLabel[role="dates"] {{ color: {t['text_faint']}; font-size: 11px; }}
+QLabel[role="score"] {{ color: {t['success']}; font-size: 28px; font-weight: bold;
+                        margin-right: 20px; }}
 
-- The file in the **higher-priority folder** is kept; the other is trashed
-- If both folders share the same priority, the file with the **shorter absolute path** is kept
+QLabel#preview {{
+    background-color: {t['preview']}; color: {t['text_muted']};
+    border: 1px solid {t['border']}; border-radius: 4px; font-size: 16px;
+}}
+QLabel#preview[kind="audio"] {{ font-size: 28px; }}
+QLabel#preview[kind="generic"] {{ font-size: 20px; }}
 
-Priorities are saved inside the index database, so they persist across sessions when you reload an index.
+/* ---- panes --------------------------------------------------------- */
+QWidget#comparePane {{ background-color: {t['window']}; }}
+QFrame#metaFrame {{ background-color: {t['surface']}; border: 1px solid {t['divider']};
+                    border-radius: 4px; margin-top: 10px; }}
+QFrame#actionBar {{ background-color: {t['surface_alt']}; border-top: 1px solid {t['border']}; }}
 
----
+/* ---- lists and tables ---------------------------------------------- */
+QListWidget, QTableWidget {{
+    background-color: {t['surface']}; color: {t['text']};
+    border: 1px solid {t['border']}; outline: none;
+}}
+QListWidget#matchList {{ font-size: 13px; border: none; }}
+QListWidget#matchList::item {{ padding: 8px; border-bottom: 1px solid {t['divider']}; }}
+QListWidget#matchList::item:hover {{ background-color: {t['surface_alt']}; }}
+QListWidget#matchList::item:selected {{
+    background-color: {t['selection']}; color: {t['text']};
+    border-left: 3px solid {t['accent']};
+}}
+QTableWidget {{ gridline-color: {t['divider']}; }}
+QTableWidget::item:selected {{ background-color: {t['selection']}; color: {t['text']}; }}
+QHeaderView::section {{
+    background-color: {t['surface_alt']}; color: {t['text_muted']};
+    border: none; border-bottom: 1px solid {t['border']};
+    border-right: 1px solid {t['divider']}; padding: 4px 6px; font-weight: bold;
+}}
+QTableCornerButton::section {{ background-color: {t['surface_alt']}; border: none; }}
 
-## Database and cleanup
+/* ---- progress ------------------------------------------------------ */
+QProgressBar {{ background-color: {t['progress_track']}; border: none; }}
+QProgressBar::chunk {{ background-color: {t['accent']}; }}
+"""
 
-- **Single folder scan:** the database is saved as `duplicate_index.db` inside that folder
-- **Multi-folder scan:** you will be prompted to choose a save location (custom filenames are supported)
-- On exit, the app offers to send the database file (and its WAL journal files) to the Trash
 
----
+class ThemeManager(QObject):
+    """
+    Owns the active theme and keeps it in sync with the user's choice and,
+    in "system" mode, with the desktop.
+    """
 
-## Screenshots
+    mode_changed = pyqtSignal(str)      # "system" | "light" | "dark"
+    theme_applied = pyqtSignal(str)     # effective "light" | "dark"
 
-![Main comparison view showing two near-identical photos side by side with a 97% similarity score, delete and keep buttons, and file metadata panels below each image](screens/main.png)
+    SETTINGS_KEY = "appearance/theme"
 
-![Skipped files dialog listing files that could not be processed during the scan, with an Export button to save the list as a text file](screens/skipped.png)
+    def __init__(self, app, settings=None):
+        super().__init__()
+        self.app = app
+        self.settings = settings or QSettings("FuzzyDuplicateFinder", "FuzzyDuplicateFinder")
 
-*Sample photos courtesy of [International-dish78](https://www.reddit.com/user/International-dish78/) via [/r/windows](https://www.reddit.com/r/windows/comments/1kmpiox).*
+        stored = self.settings.value(self.SETTINGS_KEY, "system")
+        self.mode = stored if stored in MODES else "system"
+        self.effective = None
+        self._portal_scheme = None
+        self._applying = False
 
----
+        # Capture before we replace it; used as the last-resort signal.
+        self._platform_palette = QPalette(app.palette())
 
-## How similarity scoring works
+        # Fusion honours the palette on every platform. The native Windows and
+        # macOS styles ignore parts of it, which is how a "light" theme ends up
+        # with a dark body or vice versa.
+        app.setStyle("Fusion")
 
-Fuzzy matches are scored on a weighted combination of signals. Weights are only applied when the relevant data is available for both files.
+        hints = app.styleHints()
+        if hasattr(hints, "colorSchemeChanged"):
+            hints.colorSchemeChanged.connect(self._on_qt_scheme_changed)
 
-| Signal | Relative weight | Method |
-|--------|--------|--------|
-| Perceptual hash | 50% | pHash distance (images and video thumbnails) |
-| Audio fingerprint | 50% | Chroma-based MD5 via librosa (audio files) |
-| Filename similarity | 20% | SequenceMatcher ratio |
-| File size similarity | 10% | Proportional difference |
-| Extension match | 5% | Exact string match |
+        self._setup_portal()
 
-Weights are **relative**, not absolute percentages: the final score is normalized by the sum of the weights that actually applied. For a typical image pair with a filename, a size and a matching extension, the perceptual hash therefore accounts for 50 / 0.85 = ~59% of the score, not 50%.
+    # -- detection --------------------------------------------------------
 
-Text and code files have **no content comparison**. They are scored on filename, size and extension only, so two byte-identical files with very different names will not be reported as a fuzzy match (they are still caught by exact MD5 matching).
+    def system_scheme(self):
+        if self._portal_scheme in ("light", "dark"):
+            return self._portal_scheme
 
-Files from different media categories (image/video vs audio vs text) are never compared against each other. Pairs that are already reported as exact duplicates are excluded from the fuzzy pass, and hardlinks to the same inode are not reported as duplicates since deleting one frees no space.
+        hints = self.app.styleHints()
+        getter = getattr(hints, "colorScheme", None)
+        if getter is not None:
+            scheme = getter()
+            if scheme == Qt.ColorScheme.Dark:
+                return "dark"
+            if scheme == Qt.ColorScheme.Light:
+                return "light"
 
-The default similarity threshold is **70%**. Only matches at or above this score appear in the results list.
+        window = self._platform_palette.color(QPalette.ColorRole.Window)
+        return "dark" if window.lightness() < 128 else "light"
 
----
+    def resolve(self):
+        return self.system_scheme() if self.mode == "system" else self.mode
 
-## License
+    # -- applying ---------------------------------------------------------
 
-See [LICENSE](LICENSE).
+    def set_mode(self, mode):
+        if mode not in MODES:
+            return
+        changed = mode != self.mode
+        self.mode = mode
+        self.settings.setValue(self.SETTINGS_KEY, mode)
+        self.apply()
+        if changed:
+            self.mode_changed.emit(mode)
+
+    def apply(self):
+        if self._applying:
+            return
+        self._applying = True
+        try:
+            self._sync_platform_hint()
+            effective = self.resolve()
+            tokens = THEMES[effective]
+            self.app.setPalette(build_palette(tokens))
+            self.app.setStyleSheet(build_stylesheet(tokens))
+            self.effective = effective
+            self.theme_applied.emit(effective)
+        finally:
+            self._applying = False
+
+    def _sync_platform_hint(self):
+        """
+        Tell Qt about a forced scheme so native chrome (the Windows title bar
+        in particular) follows it. Unset it in system mode so Qt goes back to
+        reporting the real desktop value.
+        """
+        hints = self.app.styleHints()
+        if self.mode == "system":
+            if hasattr(hints, "unsetColorScheme"):
+                hints.unsetColorScheme()
+        elif hasattr(hints, "setColorScheme"):
+            hints.setColorScheme(
+                Qt.ColorScheme.Dark if self.mode == "dark" else Qt.ColorScheme.Light
+            )
+
+    def _on_qt_scheme_changed(self, *_):
+        if self.mode == "system" and not self._applying:
+            self.apply()
+
+    # -- freedesktop portal ----------------------------------------------
+
+    _PORTAL_SERVICE = "org.freedesktop.portal.Desktop"
+    _PORTAL_PATH = "/org/freedesktop/portal/desktop"
+    _PORTAL_IFACE = "org.freedesktop.portal.Settings"
+    _APPEARANCE_NS = "org.freedesktop.appearance"
+
+    def _setup_portal(self):
+        if not _HAVE_DBUS or not sys.platform.startswith("linux"):
+            return
+        try:
+            bus = QDBusConnection.sessionBus()
+            if not bus.isConnected():
+                return
+            iface = QDBusInterface(self._PORTAL_SERVICE, self._PORTAL_PATH,
+                                   self._PORTAL_IFACE, bus)
+            if not iface.isValid():
+                return
+
+            reply = iface.call("ReadOne", self._APPEARANCE_NS, "color-scheme")
+            if reply.type() == QDBusMessage.MessageType.ErrorMessage:
+                # ReadOne is portal v2; older portals only have Read, which
+                # wraps the value in an extra variant.
+                reply = iface.call("Read", self._APPEARANCE_NS, "color-scheme")
+            if reply.type() != QDBusMessage.MessageType.ErrorMessage and reply.arguments():
+                self._portal_scheme = self._decode_scheme(reply.arguments()[0])
+
+            bus.connect(self._PORTAL_SERVICE, self._PORTAL_PATH, self._PORTAL_IFACE,
+                        "SettingChanged", self._on_portal_setting_changed)
+        except Exception:
+            self._portal_scheme = None
+
+    @staticmethod
+    def _decode_scheme(value):
+        for _ in range(3):
+            if hasattr(value, "variant"):
+                value = value.variant()
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            return None
+        # 0 = no preference, 1 = prefer dark, 2 = prefer light
+        return {1: "dark", 2: "light"}.get(number)
+
+    if _HAVE_DBUS:
+        @pyqtSlot(QDBusMessage)
+        def _on_portal_setting_changed(self, message):
+            args = message.arguments()
+            if len(args) < 3:
+                return
+            namespace, key, value = args[0], args[1], args[2]
+            if namespace != self._APPEARANCE_NS or key != "color-scheme":
+                return
+            self._portal_scheme = self._decode_scheme(value)
+            if self.mode == "system":
+                self.apply()
