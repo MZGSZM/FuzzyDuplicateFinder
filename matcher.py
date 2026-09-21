@@ -1,3 +1,8 @@
+"""
+Duplicate matching for Fuzzy Duplicate Finder.
+
+"""
+
 from __future__ import annotations
 
 import concurrent.futures
