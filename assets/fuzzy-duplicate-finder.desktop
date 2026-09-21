@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.5
+Name=Fuzzy Duplicate Finder
+GenericName=Duplicate File Finder
+Comment=Find exact and visually or acoustically similar duplicate files
+Exec=FuzzyDuplicateFinder
+Icon=fuzzy-duplicate-finder
+Terminal=false
+Categories=Utility;FileTools;Qt;
+Keywords=duplicate;dedupe;photos;images;video;audio;cleanup;

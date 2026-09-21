@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <title>Fuzzy Duplicate Finder (small sizes)</title>
+  <!-- Simplified for 16-32 px: no blur, no photo glyph, heavier shapes. -->
+  <defs>
+    <clipPath id="front"><rect x="86" y="62" width="136" height="136" rx="20"/></clipPath>
+  </defs>
+  <rect x="0" y="0" width="256" height="256" rx="56" fill="#1f2226"/>
+  <g transform="rotate(-9 104 116)">
+    <rect x="34" y="42" width="128" height="128" rx="20" fill="#6b7482"/>
+  </g>
+  <rect x="86" y="62" width="136" height="136" rx="20" fill="#1e88e5"/>
+  <path clip-path="url(#front)" d="M86 198 L134 136 L164 172 L184 150 L222 198 Z" fill="#ffffff" fill-opacity="0.9"/>
+  <circle cx="186" cy="194" r="50" fill="#4caf50" stroke="#1f2226" stroke-width="10"/>
+  <g stroke="#ffffff" stroke-width="14" stroke-linecap="round">
+    <line x1="164" y1="180" x2="208" y2="180"/>
+    <line x1="164" y1="208" x2="208" y2="208"/>
+  </g>
+</svg>

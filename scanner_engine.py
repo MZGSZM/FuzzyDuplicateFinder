@@ -1,3 +1,37 @@
+"""
+Filesystem indexing for Fuzzy Duplicate Finder.
+
+Summary of changes against the previous version:
+
+  * Database writes are batched and committed in groups instead of one commit
+    per file under a global lock. That was an fsync per file and serialised
+    every worker thread.
+  * The existing index is loaded once into a dict instead of issuing one locked
+    SELECT per file.
+  * Files whose size is unique across the index can never be byte-identical to
+    anything, so their MD5 is skipped entirely. On a media library this removes
+    most of the read I/O in phase 1.
+  * Directory walking uses os.scandir, which gives size and mtime without an
+    extra stat syscall per file.
+  * Images and videos whose perceptual hash fails are now still indexed using
+    their exact hash, matching the fix already applied to audio. Previously
+    they were dropped from the database entirely, so their byte-identical
+    copies were never reported.
+  * Unchanged files reuse their stored hashes rather than recomputing them when
+    only one of the hashes is missing.
+  * Overlapping scan roots and repeated paths are de-duplicated before queuing.
+  * Symlinked directories are not followed, and symlinked files are recorded
+    with their inode identity so the matcher can avoid reporting hardlinks as
+    duplicates.
+  * The executor is shut down with wait=True before the connection is closed.
+    The previous code closed sqlite out from under in-flight writer threads on
+    a user-triggered stop.
+  * OPENCV_LOG_LEVEL is set before cv2 is imported, which is the only point at
+    which it has any effect.
+  * Pillow's decompression bomb guard is raised rather than disabled outright.
+  * PIL image handles are closed instead of being left to the garbage collector.
+"""
+
 from __future__ import annotations
 
 import concurrent.futures

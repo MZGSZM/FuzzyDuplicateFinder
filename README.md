@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/icon.svg" width="128" height="128" alt="Fuzzy Duplicate Finder icon">
+</p>
+
 # Fuzzy Duplicate Finder
 
 A cross-platform desktop tool for finding both exact and visually/acoustically similar duplicate files across one or more folders. Built with Python and PyQt6.
@@ -19,6 +23,7 @@ A cross-platform desktop tool for finding both exact and visually/acoustically s
 - **Skipped files log** with one-click export to a text file, listing anything that couldn't be processed
 - **Configurable thread count** -- set the number of worker threads from the UI to match your hardware
 - **Multi-folder scanning** with per-folder priority settings for the auto-prune decision
+- **Light and dark themes** with a System option that follows your desktop setting
 
 ---
 
@@ -38,6 +43,16 @@ A cross-platform desktop tool for finding both exact and visually/acoustically s
 ### Compiled binary (recommended)
 
 Download the latest release for your OS from the [Releases page](/../../releases/latest). No dependencies required -- just run the binary.
+
+### Linux desktop integration (optional)
+
+To get a menu entry and the correct taskbar icon, run the included script against the downloaded binary:
+
+```
+tools/install_linux_desktop_entry.sh /path/to/FuzzyDuplicateFinder
+```
+
+This installs the desktop entry and icons under `~/.local/share` for the current user only. `--uninstall` removes them. On Wayland this is required for a proper taskbar icon, since Wayland compositors read the icon from the desktop entry rather than from the running program.
 
 ### From source
 
@@ -85,6 +100,16 @@ The **Threads** spinbox in the top-right corner of the toolbar sets the maximum 
 
 ---
 
+### Theme
+
+Choose **System**, **Light** or **Dark** from the **Theme** selector in the toolbar or from **View > Theme**. The default is System, which follows your desktop's light/dark setting and updates live when you change it. Your choice is remembered between runs.
+
+System detection uses the freedesktop settings portal on Linux (KDE Plasma, GNOME and other portal-backed desktops), and Qt's platform colour scheme on Windows and macOS. On a Linux desktop with no portal, the app falls back to the lightness of the platform palette at startup, and will not follow later changes until restarted.
+
+The app uses Qt's Fusion style on every platform so that both themes render consistently. The native Windows and macOS widget styles ignore parts of a custom palette, which leads to mixed light and dark widgets.
+
+---
+
 ## Folder priorities and auto-prune logic
 
 When scanning multiple folders, each folder is assigned a **priority** (default: 10). Use the ▲ / ▼ arrows in the folder table to adjust.
@@ -128,13 +153,48 @@ Fuzzy matches are scored on a weighted combination of signals. Weights are only 
 | File size similarity | 10% | Proportional difference |
 | Extension match | 5% | Exact string match |
 
-Weights are **relative**, not absolute percentages: the final score is normalized by the sum of the weights that actually applied. For a typical image pair with a filename, a size and a matching extension, the perceptual hash therefore accounts for 50 / 0.85 = ~59% of the score, not 50%.
+Weights are **relative**, not absolute percentages: the final score is normalised by the sum of the weights that actually applied. For a typical image pair with a filename, a size and a matching extension, the perceptual hash therefore accounts for 50 / 0.85 = ~59% of the score, not 50%.
 
 Text and code files have **no content comparison**. They are scored on filename, size and extension only, so two byte-identical files with very different names will not be reported as a fuzzy match (they are still caught by exact MD5 matching).
 
 Files from different media categories (image/video vs audio vs text) are never compared against each other. Pairs that are already reported as exact duplicates are excluded from the fuzzy pass, and hardlinks to the same inode are not reported as duplicates since deleting one frees no space.
 
 The default similarity threshold is **70%**. Only matches at or above this score appear in the results list.
+
+---
+
+## Project layout
+
+```
+FuzzyDuplicateFinder/
+├── main.py                        UI and application entry point
+├── theme.py                       Light/dark tokens, stylesheet, system theme detection
+├── matcher.py                     Exact and fuzzy duplicate matching
+├── scanner_engine.py              Filesystem indexing and hashing
+├── requirements.txt
+├── FuzzyDuplicateFinder.spec      PyInstaller build configuration
+├── assets/
+│   ├── icon.svg                   Icon source, full detail (48 px and up)
+│   ├── icon-small.svg             Icon source, simplified (16-32 px)
+│   ├── icon.ico                   Windows executable icon (generated)
+│   ├── icon.icns                  macOS bundle icon (generated)
+│   ├── fuzzy-duplicate-finder.desktop
+│   └── icons/
+│       └── icon-{16..512}.png     Runtime window icon set (generated)
+├── tools/
+│   ├── build_icons.py             Regenerates all generated icon files from the SVGs
+│   └── install_linux_desktop_entry.sh
+├── screens/
+├── debug/
+└── .github/workflows/build.yaml
+```
+
+The SVGs are the source of truth. After editing either one, regenerate the rest with:
+
+```
+pip install cairosvg Pillow
+python tools/build_icons.py
+```
 
 ---
 
