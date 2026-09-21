@@ -1,6 +1,5 @@
 """
 Fuzzy Duplicate Finder.
-
 """
 
 import math
@@ -15,7 +14,7 @@ import cv2
 from PyQt6.QtCore import QSize, Qt, QThread, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import (QAction, QActionGroup, QDesktopServices, QIcon, QImage,
                          QImageReader, QPixmap)
-from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QComboBox, QDialog,
+from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QDialog,
                              QFileDialog, QFrame, QHBoxLayout, QHeaderView, QLabel,
                              QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
                              QProgressBar, QProgressDialog, QPushButton, QSizePolicy,
@@ -472,9 +471,6 @@ class DuplicateFinderApp(QMainWindow):
         tools_menu.addAction(prune_exact_action)
 
         help_menu = menubar.addMenu("&Help")
-        repo_action = QAction("GitHub Repository", self)
-        repo_action.triggered.connect(self.open_github)
-        help_menu.addAction(repo_action)
         about_action = QAction(f"&About {APP_NAME}", self)
         about_action.triggered.connect(self.show_about)
         help_menu.addAction(about_action)
@@ -533,15 +529,6 @@ class DuplicateFinderApp(QMainWindow):
             "your core count."
         )
 
-        lbl_theme = set_role(QLabel("Theme:"), "muted")
-        self.theme_combo = QComboBox()
-        for mode in MODES:
-            self.theme_combo.addItem(MODE_LABELS[mode], mode)
-        self.theme_combo.setToolTip("System follows your desktop's light/dark setting.")
-        self.theme_combo.currentIndexChanged.connect(
-            lambda index: self.theme.set_mode(self.theme_combo.itemData(index))
-        )
-
         row.addWidget(btn_add_folder)
         row.addWidget(btn_clear_folders)
         row.addWidget(btn_load_index)
@@ -552,9 +539,6 @@ class DuplicateFinderApp(QMainWindow):
         row.addStretch()
         row.addWidget(lbl_threads)
         row.addWidget(self.spin_workers)
-        row.addSpacing(16)
-        row.addWidget(lbl_theme)
-        row.addWidget(self.theme_combo)
         return toolbar
 
     def _build_body(self):
@@ -716,15 +700,10 @@ class DuplicateFinderApp(QMainWindow):
     # -------------------------------------------------------------------------
 
     def _sync_theme_controls(self, mode):
-        """Keep the menu and the toolbar selector in step with each other."""
+        """Reflect the active mode in View > Theme."""
         action = self._theme_actions.get(mode)
         if action is not None:
             action.setChecked(True)
-        index = self.theme_combo.findData(mode)
-        if index >= 0 and index != self.theme_combo.currentIndex():
-            self.theme_combo.blockSignals(True)
-            self.theme_combo.setCurrentIndex(index)
-            self.theme_combo.blockSignals(False)
 
     # -------------------------------------------------------------------------
     # Folder management
