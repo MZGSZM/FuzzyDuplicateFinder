@@ -1,0 +1,201 @@
+file,group,step,variant,human_similarity_estimate,base,phash_distance_to_original,app_score_vs_original
+img_1e7ea419.jpg,1,0,original,100,img_1e7ea419.jpg,0,exact
+img_51c9bc70.jpg,1,1,byte-identical copy,100,img_1e7ea419.jpg,0,exact
+img_80a4df5a.jpg,1,2,re-saved JPEG q95,98,img_1e7ea419.jpg,0,87.8
+img_f38b2ffc.png,1,3,saved as PNG,97,img_1e7ea419.jpg,0,74.7
+img_8306d03b.webp,1,4,saved as WebP,96,img_1e7ea419.jpg,0,72.9
+img_a5aec797.jpg,1,5,re-saved JPEG q60,95,img_1e7ea419.jpg,0,82.3
+img_dc28ff90.jpg,1,6,re-saved JPEG q25,92,img_1e7ea419.jpg,0,79.8
+img_f3f49249.jpg,1,7,resized to 50%,92,img_1e7ea419.jpg,0,82.0
+img_1a466884.jpg,1,8,rotated 90 deg with EXIF tag (displays upright),90,img_1e7ea419.jpg,0,91.3
+img_e255accb.jpg,1,9,brightness +12%,88,img_1e7ea419.jpg,0,90.6
+img_39292d22.jpg,1,10,contrast +25%,85,img_1e7ea419.jpg,0,89.6
+img_e5121482.jpg,1,11,gaussian blur r=3,82,img_1e7ea419.jpg,0,83.7
+img_99dd251d.jpg,1,12,heavy noise sigma=25,78,img_1e7ea419.jpg,0,80.8
+img_9f199504.jpg,1,13,grayscale,75,img_1e7ea419.jpg,0,88.6
+img_8e7aa6e9.jpg,1,14,cropped 8% and rescaled,70,img_1e7ea419.jpg,8,45.4
+img_6bad6be2.jpg,1,15,caption bar over bottom 18%,60,img_1e7ea419.jpg,8,40.6
+img_c88b2875.jpg,1,16,rotated 4 deg,50,img_1e7ea419.jpg,8,41.7
+img_9293de8f.jpg,1,17,cropped 25% and rescaled,40,img_1e7ea419.jpg,18,28.9
+img_8c3d5f16.jpg,1,18,mirrored left-right,25,img_1e7ea419.jpg,30,29.5
+img_bb049a79.jpg,1,20,unrelated scene,0,img_1e7ea419.jpg,32,31.0
+img_c6cd75e9.jpg,2,0,original,100,img_c6cd75e9.jpg,0,exact
+img_c4a334bf.jpg,2,1,byte-identical copy,100,img_c6cd75e9.jpg,0,exact
+img_7dabe929.jpg,2,2,re-saved JPEG q95,98,img_c6cd75e9.jpg,0,89.2
+img_c0433cbd.png,2,3,saved as PNG,97,img_c6cd75e9.jpg,0,79.4
+img_c5e818fa.webp,2,4,saved as WebP,96,img_c6cd75e9.jpg,0,77.2
+img_96263ae6.jpg,2,5,re-saved JPEG q60,95,img_c6cd75e9.jpg,0,80.8
+img_70eb9a0a.jpg,2,6,re-saved JPEG q25,92,img_c6cd75e9.jpg,0,82.7
+img_3d6c51e3.jpg,2,7,resized to 50%,92,img_c6cd75e9.jpg,0,84.8
+img_00a61f93.jpg,2,8,rotated 90 deg with EXIF tag (displays upright),90,img_c6cd75e9.jpg,0,89.8
+img_9d3c7dec.jpg,2,9,brightness +12%,88,img_c6cd75e9.jpg,0,88.8
+img_14aa4e71.jpg,2,10,contrast +25%,85,img_c6cd75e9.jpg,0,89.5
+img_1c593af5.jpg,2,11,gaussian blur r=3,82,img_c6cd75e9.jpg,0,85.1
+img_49889310.jpg,2,12,heavy noise sigma=25,78,img_c6cd75e9.jpg,0,80.8
+img_d11745ad.jpg,2,13,grayscale,75,img_c6cd75e9.jpg,0,90.2
+img_1919e93a.jpg,2,14,cropped 8% and rescaled,70,img_c6cd75e9.jpg,6,54.2
+img_731c9452.jpg,2,15,caption bar over bottom 18%,60,img_c6cd75e9.jpg,14,30.3
+img_02f0ee99.jpg,2,16,rotated 4 deg,50,img_c6cd75e9.jpg,8,43.2
+img_d0944996.jpg,2,17,cropped 25% and rescaled,40,img_c6cd75e9.jpg,22,30.4
+img_e4163207.jpg,2,18,mirrored left-right,25,img_c6cd75e9.jpg,28,29.5
+img_7d836e77.jpg,2,20,unrelated scene,0,img_c6cd75e9.jpg,38,31.1
+img_adec6f11.jpg,3,0,original,100,img_adec6f11.jpg,0,exact
+img_5071950e.jpg,3,1,byte-identical copy,100,img_adec6f11.jpg,0,exact
+img_35d14880.jpg,3,2,re-saved JPEG q95,98,img_adec6f11.jpg,0,87.8
+img_65b00a2d.png,3,3,saved as PNG,97,img_adec6f11.jpg,0,76.3
+img_406329bc.webp,3,4,saved as WebP,96,img_adec6f11.jpg,0,74.4
+img_59001ac9.jpg,3,5,re-saved JPEG q60,95,img_adec6f11.jpg,0,80.8
+img_fadb8908.jpg,3,6,re-saved JPEG q25,92,img_adec6f11.jpg,0,81.2
+img_ffb88309.jpg,3,7,resized to 50%,92,img_adec6f11.jpg,0,80.5
+img_ede7bd0c.jpg,3,8,rotated 90 deg with EXIF tag (displays upright),90,img_adec6f11.jpg,0,91.3
+img_5b4c8012.jpg,3,9,brightness +12%,88,img_adec6f11.jpg,2,78.8
+img_ce1d62e0.jpg,3,10,contrast +25%,85,img_adec6f11.jpg,2,79.3
+img_60581cca.jpg,3,11,gaussian blur r=3,82,img_adec6f11.jpg,0,83.6
+img_ffe976ab.jpg,3,12,heavy noise sigma=25,78,img_adec6f11.jpg,2,69.0
+img_bef7e268.jpg,3,13,grayscale,75,img_adec6f11.jpg,0,88.6
+img_837a7935.jpg,3,14,cropped 8% and rescaled,70,img_adec6f11.jpg,4,64.5
+img_a341738c.jpg,3,15,caption bar over bottom 18%,60,img_adec6f11.jpg,18,30.3
+img_1389b372.jpg,3,16,rotated 4 deg,50,img_adec6f11.jpg,10,30.0
+img_b91dddd9.jpg,3,17,cropped 25% and rescaled,40,img_adec6f11.jpg,26,28.8
+img_57241955.jpg,3,18,mirrored left-right,25,img_adec6f11.jpg,32,29.5
+img_8eb5140f.jpg,3,20,unrelated scene,0,img_adec6f11.jpg,34,30.9
+img_89be9c1c.jpg,4,0,original,100,img_89be9c1c.jpg,0,exact
+img_4ac87fc0.jpg,4,1,byte-identical copy,100,img_89be9c1c.jpg,0,exact
+img_49a047dc.jpg,4,2,re-saved JPEG q95,98,img_89be9c1c.jpg,0,87.7
+img_751b4c83.png,4,3,saved as PNG,97,img_89be9c1c.jpg,0,77.8
+img_24114258.webp,4,4,saved as WebP,96,img_89be9c1c.jpg,0,74.2
+img_e060a724.jpg,4,5,re-saved JPEG q60,95,img_89be9c1c.jpg,0,80.7
+img_a51149bb.jpg,4,6,re-saved JPEG q25,92,img_89be9c1c.jpg,2,69.4
+img_b437bdb5.jpg,4,7,resized to 50%,92,img_89be9c1c.jpg,0,80.3
+img_b766ff10.jpg,4,8,rotated 90 deg with EXIF tag (displays upright),90,img_89be9c1c.jpg,0,89.8
+img_93d20470.jpg,4,9,brightness +12%,88,img_89be9c1c.jpg,0,88.9
+img_4f1a8a1d.jpg,4,10,contrast +25%,85,img_89be9c1c.jpg,4,66.1
+img_06555096.jpg,4,11,gaussian blur r=3,82,img_89be9c1c.jpg,0,82.0
+img_d9090b89.jpg,4,12,heavy noise sigma=25,78,img_89be9c1c.jpg,0,82.2
+img_b5fb12e0.jpg,4,13,grayscale,75,img_89be9c1c.jpg,0,88.7
+img_5e6c9992.jpg,4,14,cropped 8% and rescaled,70,img_89be9c1c.jpg,16,30.6
+img_5d111a9d.jpg,4,15,caption bar over bottom 18%,60,img_89be9c1c.jpg,12,28.9
+img_7608d942.jpg,4,16,rotated 4 deg,50,img_89be9c1c.jpg,18,31.4
+img_6c167229.jpg,4,17,cropped 25% and rescaled,40,img_89be9c1c.jpg,24,30.3
+img_17371472.jpg,4,18,mirrored left-right,25,img_89be9c1c.jpg,32,29.5
+img_e41686cd.jpg,4,20,unrelated scene,0,img_89be9c1c.jpg,30,32.7
+img_95f19a51.jpg,5,0,original,100,img_95f19a51.jpg,0,exact
+img_8df05f25.jpg,5,1,byte-identical copy,100,img_95f19a51.jpg,0,exact
+img_7f9ac098.jpg,5,2,re-saved JPEG q95,98,img_95f19a51.jpg,0,89.3
+img_de0279e1.png,5,3,saved as PNG,97,img_95f19a51.jpg,0,77.9
+img_1dcf884c.webp,5,4,saved as WebP,96,img_95f19a51.jpg,0,74.4
+img_6ce9da66.jpg,5,5,re-saved JPEG q60,95,img_95f19a51.jpg,0,82.4
+img_81a0ba05.jpg,5,6,re-saved JPEG q25,92,img_95f19a51.jpg,0,82.7
+img_cd73de00.jpg,5,7,resized to 50%,92,img_95f19a51.jpg,0,79.1
+img_c0099eba.jpg,5,8,rotated 90 deg with EXIF tag (displays upright),90,img_95f19a51.jpg,0,91.3
+img_dde3a361.jpg,5,9,brightness +12%,88,img_95f19a51.jpg,0,90.3
+img_99a46df0.jpg,5,10,contrast +25%,85,img_95f19a51.jpg,0,92.0
+img_e01c683e.jpg,5,11,gaussian blur r=3,82,img_95f19a51.jpg,0,82.3
+img_7db4304d.jpg,5,12,heavy noise sigma=25,78,img_95f19a51.jpg,0,79.4
+img_65ed0de4.jpg,5,13,grayscale,75,img_95f19a51.jpg,0,87.1
+img_eab06e9b.jpg,5,14,cropped 8% and rescaled,70,img_95f19a51.jpg,6,52.7
+img_864fa3f3.jpg,5,15,caption bar over bottom 18%,60,img_95f19a51.jpg,14,30.4
+img_423674a6.jpg,5,16,rotated 4 deg,50,img_95f19a51.jpg,6,53.5
+img_d82fb0f1.jpg,5,17,cropped 25% and rescaled,40,img_95f19a51.jpg,24,30.3
+img_6b82e6c9.jpg,5,18,mirrored left-right,25,img_95f19a51.jpg,32,29.5
+img_ed1d9d16.jpg,5,20,unrelated scene,0,img_95f19a51.jpg,36,32.2
+img_fb759e0f.jpg,6,0,original,100,img_fb759e0f.jpg,0,exact
+img_7aac319f.jpg,6,1,byte-identical copy,100,img_fb759e0f.jpg,0,exact
+img_8350a73f.jpg,6,2,re-saved JPEG q95,98,img_fb759e0f.jpg,0,89.2
+img_849acfb5.png,6,3,saved as PNG,97,img_fb759e0f.jpg,0,79.4
+img_ce1fd3d9.webp,6,4,saved as WebP,96,img_fb759e0f.jpg,0,75.7
+img_067f0cfc.jpg,6,5,re-saved JPEG q60,95,img_fb759e0f.jpg,0,82.1
+img_93550840.jpg,6,6,re-saved JPEG q25,92,img_fb759e0f.jpg,0,81.1
+img_397a7623.jpg,6,7,resized to 50%,92,img_fb759e0f.jpg,0,80.3
+img_c40d31b5.jpg,6,8,rotated 90 deg with EXIF tag (displays upright),90,img_fb759e0f.jpg,0,88.3
+img_2106119e.jpg,6,9,brightness +12%,88,img_fb759e0f.jpg,2,78.8
+img_d1711cbd.jpg,6,10,contrast +25%,85,img_fb759e0f.jpg,0,89.5
+img_0c83e786.jpg,6,11,gaussian blur r=3,82,img_fb759e0f.jpg,0,81.9
+img_f675299b.jpg,6,12,heavy noise sigma=25,78,img_fb759e0f.jpg,0,85.1
+img_b464c554.jpg,6,13,grayscale,75,img_fb759e0f.jpg,0,88.7
+img_85f184e0.jpg,6,14,cropped 8% and rescaled,70,img_fb759e0f.jpg,4,67.5
+img_e306f0c4.jpg,6,15,caption bar over bottom 18%,60,img_fb759e0f.jpg,24,31.9
+img_aba4c70e.jpg,6,16,rotated 4 deg,50,img_fb759e0f.jpg,18,33.0
+img_1a42721e.jpg,6,17,cropped 25% and rescaled,40,img_fb759e0f.jpg,28,30.4
+img_b7a1774f.jpg,6,18,mirrored left-right,25,img_fb759e0f.jpg,30,32.4
+img_6dedc86a.jpg,6,20,unrelated scene,0,img_fb759e0f.jpg,34,29.7
+img_78549014.jpg,7,0,original,100,img_78549014.jpg,0,exact
+img_2475263c.jpg,7,1,byte-identical copy,100,img_78549014.jpg,0,exact
+img_7b6bc3c6.jpg,7,2,re-saved JPEG q95,98,img_78549014.jpg,0,86.3
+img_e261e34a.png,7,3,saved as PNG,97,img_78549014.jpg,0,77.8
+img_3a9afa39.webp,7,4,saved as WebP,96,img_78549014.jpg,0,74.1
+img_d9814559.jpg,7,5,re-saved JPEG q60,95,img_78549014.jpg,0,83.7
+img_e2cbbb93.jpg,7,6,re-saved JPEG q25,92,img_78549014.jpg,0,79.7
+img_1f3c42b2.jpg,7,7,resized to 50%,92,img_78549014.jpg,0,81.9
+img_a06d7a69.jpg,7,8,rotated 90 deg with EXIF tag (displays upright),90,img_78549014.jpg,0,88.3
+img_b3618e1c.jpg,7,9,brightness +12%,88,img_78549014.jpg,2,77.4
+img_74f09af5.jpg,7,10,contrast +25%,85,img_78549014.jpg,4,69.1
+img_ac9f21df.jpg,7,11,gaussian blur r=3,82,img_78549014.jpg,0,83.5
+img_782afe6b.jpg,7,12,heavy noise sigma=25,78,img_78549014.jpg,0,82.2
+img_b6eafff5.jpg,7,13,grayscale,75,img_78549014.jpg,0,87.1
+img_edf165da.jpg,7,14,cropped 8% and rescaled,70,img_78549014.jpg,8,40.9
+img_f5a9ca5f.jpg,7,15,caption bar over bottom 18%,60,img_78549014.jpg,20,30.3
+img_fcbad167.jpg,7,16,rotated 4 deg,50,img_78549014.jpg,10,29.9
+img_fa97002c.jpg,7,17,cropped 25% and rescaled,40,img_78549014.jpg,22,30.3
+img_8bae8e66.jpg,7,18,mirrored left-right,25,img_78549014.jpg,34,29.5
+img_8f4ecb4f.jpg,7,20,unrelated scene,0,img_78549014.jpg,28,32.8
+img_66eebc57.jpg,8,0,original,100,img_66eebc57.jpg,0,exact
+img_ab74fe57.jpg,8,1,byte-identical copy,100,img_66eebc57.jpg,0,exact
+img_ff8b2a6a.jpg,8,2,re-saved JPEG q95,98,img_66eebc57.jpg,0,86.3
+img_4ec0a954.png,8,3,saved as PNG,97,img_66eebc57.jpg,0,79.4
+img_8c53765f.webp,8,4,saved as WebP,96,img_66eebc57.jpg,0,77.1
+img_ccbfd2ec.jpg,8,5,re-saved JPEG q60,95,img_66eebc57.jpg,0,80.7
+img_a598d0db.jpg,8,6,re-saved JPEG q25,92,img_66eebc57.jpg,0,79.7
+img_807c7e30.jpg,8,7,resized to 50%,92,img_66eebc57.jpg,0,80.4
+img_b2c55523.jpg,8,8,rotated 90 deg with EXIF tag (displays upright),90,img_66eebc57.jpg,0,91.3
+img_7a98b9ac.jpg,8,9,brightness +12%,88,img_66eebc57.jpg,0,89.0
+img_ce0d8d87.jpg,8,10,contrast +25%,85,img_66eebc57.jpg,0,91.0
+img_e26b524a.jpg,8,11,gaussian blur r=3,82,img_66eebc57.jpg,0,84.9
+img_66e61127.jpg,8,12,heavy noise sigma=25,78,img_66eebc57.jpg,0,85.1
+img_6edd77d8.jpg,8,13,grayscale,75,img_66eebc57.jpg,0,90.2
+img_33d91808.jpg,8,14,cropped 8% and rescaled,70,img_66eebc57.jpg,10,27.7
+img_4b5c1a95.jpg,8,15,caption bar over bottom 18%,60,img_66eebc57.jpg,14,30.3
+img_d4f398ee.jpg,8,16,rotated 4 deg,50,img_66eebc57.jpg,12,31.5
+img_44df8a13.jpg,8,17,cropped 25% and rescaled,40,img_66eebc57.jpg,22,27.5
+img_025ff87c.jpg,8,18,mirrored left-right,25,img_66eebc57.jpg,32,31.0
+img_265c28ea.jpg,8,20,unrelated scene,0,img_66eebc57.jpg,34,31.0
+img_a7d83351.jpg,9,0,original,100,img_a7d83351.jpg,0,exact
+img_e1cd7be8.jpg,9,1,byte-identical copy,100,img_a7d83351.jpg,0,exact
+img_98e6e5b7.jpg,9,2,re-saved JPEG q95,98,img_a7d83351.jpg,0,87.8
+img_f5ee8c72.png,9,3,saved as PNG,97,img_a7d83351.jpg,0,76.3
+img_754e64f4.webp,9,4,saved as WebP,96,img_a7d83351.jpg,0,75.8
+img_cdb54088.jpg,9,5,re-saved JPEG q60,95,img_a7d83351.jpg,0,82.2
+img_85dc0a68.jpg,9,6,re-saved JPEG q25,92,img_a7d83351.jpg,0,81.2
+img_ed4d19b8.jpg,9,7,resized to 50%,92,img_a7d83351.jpg,0,81.9
+img_7d510557.jpg,9,8,rotated 90 deg with EXIF tag (displays upright),90,img_a7d83351.jpg,0,92.8
+img_5c24c1ae.jpg,9,9,brightness +12%,88,img_a7d83351.jpg,2,78.8
+img_ebe80fa9.jpg,9,10,contrast +25%,85,img_a7d83351.jpg,2,77.8
+img_33288e16.jpg,9,11,gaussian blur r=3,82,img_a7d83351.jpg,0,85.1
+img_42969a50.jpg,9,12,heavy noise sigma=25,78,img_a7d83351.jpg,0,82.2
+img_b1515fff.jpg,9,13,grayscale,75,img_a7d83351.jpg,0,88.6
+img_7c4e4248.jpg,9,14,cropped 8% and rescaled,70,img_a7d83351.jpg,6,54.2
+img_7776c655.jpg,9,15,caption bar over bottom 18%,60,img_a7d83351.jpg,18,30.3
+img_82e26123.jpg,9,16,rotated 4 deg,50,img_a7d83351.jpg,14,31.5
+img_c446ab8c.jpg,9,17,cropped 25% and rescaled,40,img_a7d83351.jpg,16,30.2
+img_d3801b73.jpg,9,18,mirrored left-right,25,img_a7d83351.jpg,28,32.5
+img_ced66b44.jpg,9,20,unrelated scene,0,img_a7d83351.jpg,32,29.4
+img_6f29a9f1.jpg,10,0,original,100,img_6f29a9f1.jpg,0,exact
+img_8ece78b0.jpg,10,1,byte-identical copy,100,img_6f29a9f1.jpg,0,exact
+img_a9f5307c.jpg,10,2,re-saved JPEG q95,98,img_6f29a9f1.jpg,0,89.2
+img_e842997d.png,10,3,saved as PNG,97,img_6f29a9f1.jpg,0,79.4
+img_089b5123.webp,10,4,saved as WebP,96,img_6f29a9f1.jpg,0,75.9
+img_d4d6d278.jpg,10,5,re-saved JPEG q60,95,img_6f29a9f1.jpg,0,82.3
+img_4a41f8e4.jpg,10,6,re-saved JPEG q25,92,img_6f29a9f1.jpg,0,81.2
+img_511070a7.jpg,10,7,resized to 50%,92,img_6f29a9f1.jpg,0,80.5
+img_7528ea79.jpg,10,8,rotated 90 deg with EXIF tag (displays upright),90,img_6f29a9f1.jpg,0,91.3
+img_eab42bd6.jpg,10,9,brightness +12%,88,img_6f29a9f1.jpg,0,89.1
+img_cfd8c364.jpg,10,10,contrast +25%,85,img_6f29a9f1.jpg,0,89.5
+img_192f09a9.jpg,10,11,gaussian blur r=3,82,img_6f29a9f1.jpg,0,86.6
+img_703e53cf.jpg,10,12,heavy noise sigma=25,78,img_6f29a9f1.jpg,0,80.8
+img_b07822db.jpg,10,13,grayscale,75,img_6f29a9f1.jpg,0,87.2
+img_b76dc0c3.jpg,10,14,cropped 8% and rescaled,70,img_6f29a9f1.jpg,8,41.0
+img_c8fb4456.jpg,10,15,caption bar over bottom 18%,60,img_6f29a9f1.jpg,14,28.9
+img_f6540600.jpg,10,16,rotated 4 deg,50,img_6f29a9f1.jpg,4,65.2
+img_83e2665a.jpg,10,17,cropped 25% and rescaled,40,img_6f29a9f1.jpg,30,30.3
+img_4242c225.jpg,10,18,mirrored left-right,25,img_6f29a9f1.jpg,30,29.5
+img_ec0643b1.jpg,10,20,unrelated scene,0,img_6f29a9f1.jpg,34,31.0

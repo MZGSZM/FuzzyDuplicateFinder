@@ -6,7 +6,7 @@
 
 Fuzzy Duplicate Finder finds exact copies and near-copies of your photos, videos, music and text files across one or more folders, shows them side by side, and lets you send the extras to the Trash. It is for anyone cleaning up a photo library, a music collection or a pile of backups on Linux, Windows or macOS.
 
-![Main window showing two near-identical photos side by side with a similarity score, file details, and delete/keep buttons](screens/main-pretty.png)
+![Main window showing two near-identical photos side by side with a similarity score, file details, and delete/keep buttons](screens/main.png)
 
 ## Features
 
@@ -176,6 +176,19 @@ shellcheck .github/scripts/*.sh packaging/appimage/AppRun tools/*.sh
 
 The GUI tests run headless through Qt's offscreen platform. CI runs all of this on Linux, Windows and macOS for every push to `main` and every pull request.
 
+### Test images
+
+`test-images/` holds 200 images for checking matching by hand: what the app catches, what it misses, and where the threshold falls. The automated tests use small generated files. This set is for seeing results in the GUI the way a user would.
+
+There are 10 groups of 20. Each group starts from one generated scene, then goes from a byte-identical copy through re-saves, format changes, resizing, brightness, blur, noise, grayscale, crops, a caption bar, a small rotation and a mirror image, down to a completely different scene. File names are random so they cannot hint at which files belong together. `manifest.csv` says which group each file is in, what was done to it, and the score the app gave it against the group's original when the set was made.
+
+1. Add the `test-images/images` folder and start a scan. Add `images`, not its parent, so the manifest and script stay out of the scan.
+2. Compare the results against `manifest.csv`. Sorting by `group` then `step` makes it easy to read.
+
+At the default 70% threshold, 1.6.0 finds the byte copy, re-saves, format changes, resize, EXIF rotation, brightness, blur and grayscale in essentially every group. It finds the heaviest re-save, the contrast change and the heavy noise in most groups. Crops, the caption bar, rotation, mirroring and the different scene are never matched. There are no false matches between groups. Run the set again after any change to fingerprints or scoring, and compare against the manifest to see what moved. The folder's own README has the full list of variants and explains every manifest column. Its `generate_test_images.py` rebuilds the set, or refreshes the manifest's scores against the current code.
+
+### Building
+
 To build locally: `pyinstaller --noconfirm FuzzyDuplicateFinder.spec`. On Linux, `bash .github/scripts/build-appimage.sh 1.6.0` then wraps `dist/FuzzyDuplicateFinder/` in an AppImage.
 
 ## Making a release
@@ -216,6 +229,10 @@ FuzzyDuplicateFinder/
 │   ├── settings.py               persisted settings
 │   └── theme.py                  light/dark tokens, stylesheet, system detection
 ├── tests/                        pytest suite
+├── test-images/
+│   ├── images/                   200 graded test images
+│   ├── manifest.csv              what each image is, and its score when made
+│   └── generate_test_images.py   rebuilds the set
 ├── assets/                       icons and the desktop entry
 ├── packaging/appimage/AppRun     AppImage entry point
 ├── tools/                        icon builder, Linux desktop entry installer
@@ -233,5 +250,3 @@ The icon SVGs in `assets/` are the source of truth. After editing one, regenerat
 ## License
 
 See [LICENSE](LICENSE).
-
-*Sample photos in the screenshots courtesy of [International-dish78](https://www.reddit.com/user/International-dish78/) via [/r/windows](https://www.reddit.com/r/windows/comments/1kmpiox).*

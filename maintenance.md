@@ -81,7 +81,11 @@ If you change how any fuzzy fingerprint is computed (image, video, audio or text
 
 If you add a column to the index, add it to `COLUMNS` in `fdf/index.py`. Existing indexes get it automatically through `ALTER TABLE`. `test_index_upgrades_old_schema` covers the upgrade path from 1.5 indexes.
 
-## 8. Scripts
+## 8. Test images
+
+After any change to fingerprints or scoring, scan `test-images/images` and compare against its `manifest.csv`. If the results moved on purpose, refresh the manifest's measured columns with `python3 test-images/generate_test_images.py /tmp/fresh .` and copy `/tmp/fresh/manifest.csv` over the old one. The images come out identical, so only the scores change. Then update the "Test images" section of the README with the new results.
+
+## 9. Scripts
 
 All shell scripts must pass shellcheck, which CI enforces:
 
@@ -89,6 +93,6 @@ All shell scripts must pass shellcheck, which CI enforces:
 shellcheck .github/scripts/*.sh packaging/appimage/AppRun tools/*.sh
 ```
 
-## 9. Record what you did
+## 10. Record what you did
 
 Add an entry to `changes.md` for anything you changed, even if it is only dependency minimums or a workflow bump, so the next release summary picks it up.

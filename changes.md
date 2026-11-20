@@ -1,3 +1,10 @@
+2026.11.20 - Test data
+
+* Added FuzzyDuplicateFinder-test-images/: 200 generated images in 10 groups, graded from a byte-identical copy down to an unrelated scene, with manifest.csv recording what each file is and the score 1.6.0 gave it, and generate_test_images.py to rebuild the set.
+* README: new "Test images" section under Development explaining what the set is for and how to use it, and the folder added to the project layout.
+
+Reasons for changes: a repeatable set for checking by hand what the matcher catches and misses, and for spotting changes after work on fingerprints or scoring.
+
 2026.11.20 - Backend overhaul / UX overhaul / Build and release automation
 
 * Version 1.6.0.
