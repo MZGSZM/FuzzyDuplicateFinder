@@ -1,7 +1,14 @@
-PyQt6==6.11.0
-opencv-python==4.13.0.92
-imagehash==4.3.2
-Pillow==12.1.1
-send2trash==2.1.0
-numpy==2.4.4
-librosa==0.11.0
+# Minimum versions, not pins: installs and CI builds pick up the newest
+# releases. See maintenance.md for how to check that they still work.
+PyQt6>=6.5
+# Headless: the app never uses OpenCV's own windows, and the regular wheel
+# bundles a second copy of Qt that can clash with PyQt6.
+opencv-python-headless>=4.8
+ImageHash>=4.3
+Pillow>=10.0
+Send2Trash>=1.8
+numpy>=1.24
+librosa>=0.10
+soundfile>=0.12
+soxr>=0.3
+psutil>=5.9

@@ -1,21 +1,31 @@
 # -*- mode: python ; coding: utf-8 -*-
-import sys
-from PyInstaller.building.build_main import Analysis
-from PyInstaller.building.api import EXE, PYZ
+#
+# PyInstaller build for all three platforms. Run from the repo root:
+#
+#     pyinstaller --noconfirm FuzzyDuplicateFinder.spec
+#
+#   Linux    dist/FuzzyDuplicateFinder/          one folder; CI wraps it in an AppImage
+#   macOS    dist/FuzzyDuplicateFinder.app       one-folder bundle (onefile .app is
+#                                                deprecated in PyInstaller 6)
+#   Windows  dist/FuzzyDuplicateFinder.exe       single file
+#
+# A one-folder build starts much faster than a one-file build, which has to
+# unpack Qt, OpenCV and SciPy to a temp directory on every launch. Windows
+# keeps the single EXE because that is the expected download there.
 
-# Platform detection
+import sys
+
+from PyInstaller.building.api import COLLECT, EXE, PYZ
+from PyInstaller.building.build_main import Analysis
+
 is_macos = sys.platform == 'darwin'
 is_windows = sys.platform == 'win32'
 is_linux = sys.platform.startswith('linux')
 
-# Only import BUNDLE on macOS
 if is_macos:
     from PyInstaller.building.osx import BUNDLE
 
-# Runtime icon set loaded by main.load_app_icon(). The SVG is included as the
-# fallback source. Paths are relative to the repo root, which is where CI runs
-# pyinstaller from.
-icon_datas = [
+datas = [
     ('assets/icons', 'assets/icons'),
     ('assets/icon.svg', 'assets'),
 ]
@@ -25,75 +35,90 @@ if is_windows:
 elif is_macos:
     exe_icon = 'assets/icon.icns'
 else:
-    # Linux executables carry no embedded icon; the desktop entry provides it.
-    exe_icon = None
+    exe_icon = None     # the AppImage and desktop entry provide it
 
 # QtDBus is used for desktop theme detection on Linux only and does not exist
-# in the Windows and macOS wheels.
-platform_hiddenimports = ['PyQt6.QtDBus'] if is_linux else []
+# in the Windows and macOS wheels. librosa is imported lazily, so name it.
+hiddenimports = ['librosa', 'librosa.feature', 'soxr', 'soundfile']
+if is_linux:
+    hiddenimports.append('PyQt6.QtDBus')
+
+# Large packages that end up in the analysis through optional imports and are
+# never used by the app.
+excludes = ['tkinter', 'matplotlib', 'IPython', 'pytest', 'PyQt6.QtWebEngineCore',
+            'PyQt6.QtQml', 'PyQt6.QtQuick', 'PyQt6.Qt3DCore', 'PyQt6.QtMultimedia']
 
 a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=icon_datas,
-    hiddenimports=[
-        'librosa',
-        'librosa.core',
-        'librosa.feature',
-        'numpy',
-        'cv2',
-        'imagehash',
-        'PIL',
-        'PyQt6',
-        'PyQt6.QtCore',
-        'PyQt6.QtGui',
-        'PyQt6.QtWidgets',
-        'send2trash',
-        'theme',
-    ] + platform_hiddenimports,
+    datas=datas,
+    hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=excludes,
     noarchive=False,
 )
 
-# cipher= was removed in PyInstaller 6.x; it is silently ignored there.
 pyz = PYZ(a.pure, a.zipped_data)
 
-exe = EXE(
-    pyz,
-    a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    [],
-    name='FuzzyDuplicateFinder',
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=is_windows,  # Only use UPX on Windows
-    upx_exclude=[],
-    runtime_tmpdir=None,
-    console=False,
-    disable_windowed_traceback=False,
-    target_arch=None,
-    codesign_identity=None,  # Disable code signing during build
-    entitlements_file=None,
-    icon=exe_icon,
-)
-
-# Only create BUNDLE on macOS
-if is_macos:
-    app = BUNDLE(
-        exe,
-        name='FuzzyDuplicateFinder.app',
-        icon='assets/icon.icns',
-        bundle_identifier='com.fuzzyduplicate.finder',
-        info_plist={
-            'NSPrincipalClass': 'NSApplication',
-            'NSHighResolutionCapable': 'True',
-        },
-        codesign_identity=None,
+if is_windows:
+    exe = EXE(
+        pyz,
+        a.scripts,
+        a.binaries,
+        a.datas,
+        [],
+        name='FuzzyDuplicateFinder',
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        # UPX saves little on top of PyInstaller's compression and is a common
+        # antivirus false-positive trigger.
+        upx=False,
+        runtime_tmpdir=None,
+        console=False,
+        disable_windowed_traceback=False,
+        icon=exe_icon,
     )
+else:
+    exe = EXE(
+        pyz,
+        a.scripts,
+        [],
+        exclude_binaries=True,
+        name='FuzzyDuplicateFinder',
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=False,
+        # Console stays attached so the CLI (`FuzzyDuplicateFinder scan ...`)
+        # prints. On macOS the .app launcher hides it anyway.
+        console=not is_macos,
+        disable_windowed_traceback=False,
+        target_arch=None,
+        codesign_identity=None,
+        entitlements_file=None,
+        icon=exe_icon,
+    )
+    coll = COLLECT(
+        exe,
+        a.binaries,
+        a.datas,
+        strip=False,
+        upx=False,
+        name='FuzzyDuplicateFinder',
+    )
+    if is_macos:
+        app = BUNDLE(
+            coll,
+            name='FuzzyDuplicateFinder.app',
+            icon='assets/icon.icns',
+            bundle_identifier='com.fuzzyduplicate.finder',
+            info_plist={
+                'NSPrincipalClass': 'NSApplication',
+                'NSHighResolutionCapable': 'True',
+            },
+            codesign_identity=None,
+        )

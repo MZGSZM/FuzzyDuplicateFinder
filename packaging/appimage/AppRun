@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# AppImage entry point. The AppImage runtime sets APPDIR; fall back to this
+# script's folder when the AppDir is run unpacked.
+set -euo pipefail
+here="${APPDIR:-$(cd "$(dirname "$0")" && pwd)}"
+exec "$here/usr/lib/FuzzyDuplicateFinder/FuzzyDuplicateFinder" "$@"

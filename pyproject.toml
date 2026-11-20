@@ -1,0 +1,22 @@
+# Tool configuration only. The app is not installed as a package; run it with
+# `python main.py` or use a release build.
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = ["FuzzyDuplicateFinder.spec"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "I", "UP", "SIM", "PIE", "RUF100"]
+ignore = [
+    "SIM105",   # try/except/pass reads better than contextlib.suppress here
+    "B008",     # QModelIndex() default argument is the Qt idiom
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["fdf"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+timeout = 300
