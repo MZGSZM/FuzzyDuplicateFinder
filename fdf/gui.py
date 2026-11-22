@@ -4,6 +4,7 @@ Main window.
 
 from __future__ import annotations
 
+import html
 import logging
 import os
 import sys
@@ -12,6 +13,7 @@ import time
 from PyQt6.QtCore import (
     QAbstractListModel,
     QModelIndex,
+    QRectF,
     QSize,
     Qt,
     QThread,
@@ -20,7 +22,17 @@ from PyQt6.QtCore import (
     QUrl,
     pyqtSignal,
 )
-from PyQt6.QtGui import QAction, QActionGroup, QDesktopServices, QIcon, QKeySequence, QPixmap
+from PyQt6.QtGui import (
+    QAction,
+    QActionGroup,
+    QColor,
+    QDesktopServices,
+    QIcon,
+    QKeySequence,
+    QPainter,
+    QPen,
+    QPixmap,
+)
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -29,10 +41,12 @@ from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListView,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QProgressBar,
     QProgressDialog,
@@ -42,6 +56,7 @@ from PyQt6.QtWidgets import (
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -50,10 +65,23 @@ from send2trash import send2trash
 from . import APP_ID, APP_NAME, PROJECT_URL, VERSION, export, pipeline
 from .dialogs import IssuesDialog, OptionsDialog
 from .index import Index
-from .paths import default_index_path, index_dir, index_files, log_dir, normalize_root
+from .logs import scan_log, scan_log_folder
+from .paths import (
+    default_index_path,
+    dir_writable,
+    existing_index,
+    folder_index_path,
+    folder_set_key,
+    index_dir,
+    index_files,
+    log_dir,
+    normalize_root,
+    resolve_index,
+    scan_log_path,
+)
 from .preview import PreviewSignals, PreviewTask
 from .settings import AppSettings
-from .theme import MODE_LABELS, MODES, ThemeManager
+from .theme import THEMES, ThemeManager
 from .watchdog import ResourceWatchdog, format_bytes, lower_priority
 
 try:
@@ -62,6 +90,11 @@ except ImportError:  # pragma: no cover
     psutil = None
 
 log = logging.getLogger(__name__)
+# Messages that may carry file paths. Routed beside the index during a scan
+# when the index is not in the app data folder (see fdf.logs).
+scan_logger = logging.getLogger("fdf.scan")
+
+THEME_MENU = (("light", "Light"), ("dark", "Dark"), ("system", "Follow system"))
 
 DEFAULT_FOLDER_PRIORITY = 10
 PROGRESS_STEPS = 1000
@@ -181,6 +214,10 @@ class ScanWorker(QThread):
         return self._stop
 
     def run(self):
+        with scan_log(self.db_path):
+            self._run()
+
+    def _run(self):
         try:
             results = pipeline.run(
                 self.folders, self.db_path, self.options, threshold=self.threshold,
@@ -192,7 +229,7 @@ class ScanWorker(QThread):
                 results.aborted = True
             self.results_ready.emit(results)
         except Exception as exc:
-            log.exception("Scan failed")
+            scan_logger.exception("Scan failed")
             if self._stop:
                 self.results_ready.emit(pipeline.Results(aborted=True))
             else:
@@ -337,6 +374,105 @@ class ThreadCountWidget(QWidget):
         return self._value
 
 
+def theme_icon(effective, color, size=16, ratio=1.0):
+    """
+    Sun for light, moon for dark, painted in the theme's own colour. Drawn
+    rather than shipped as files: the build leaves out Qt's SVG plugin, and
+    the Unicode sun and moon glyphs look different in every font.
+    """
+    px = max(1, round(size * ratio))
+    pixmap = QPixmap(px, px)
+    pixmap.setDevicePixelRatio(ratio)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    c = size / 2
+    if effective == 'light':
+        pen = QPen(color)
+        pen.setWidthF(size / 10)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+        for i in range(8):
+            painter.save()
+            painter.translate(c, c)
+            painter.rotate(i * 45)
+            painter.drawLine(0, round(-size * 0.32), 0, round(-size * 0.44))
+            painter.restore()
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(color)
+        r = size * 0.2
+        painter.drawEllipse(QRectF(c - r, c - r, 2 * r, 2 * r))
+    else:
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(color)
+        r = size * 0.38
+        painter.drawEllipse(QRectF(c - r, c - r, 2 * r, 2 * r))
+        # Bite a second circle out of the top right to leave a crescent.
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
+        painter.setBrush(QColor(0, 0, 0))
+        cut = r * 0.85
+        cx, cy = c + size * 0.2, c - size * 0.16
+        painter.drawEllipse(QRectF(cx - cut, cy - cut, 2 * cut, 2 * cut))
+    painter.end()
+    return QIcon(pixmap)
+
+
+class ThemeToggleButton(QToolButton):
+    """
+    Status bar theme switch. Click flips between light and dark (from System
+    too, so a click always changes something). Right-click or the menu key
+    offers Light, Dark and Follow system.
+    """
+
+    def __init__(self, theme, parent=None):
+        super().__init__(parent)
+        self.theme = theme
+        self.setObjectName("themeToggle")
+        self.setAutoRaise(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        self.setIconSize(QSize(16, 16))
+        self.setAccessibleName("Theme")
+        self.clicked.connect(self.toggle)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(
+            lambda pos: self.build_menu().exec(self.mapToGlobal(pos))
+        )
+        theme.theme_applied.connect(lambda _e: self.refresh())
+        theme.mode_changed.connect(lambda _m: self.refresh())
+        self.refresh()
+
+    def effective(self):
+        return self.theme.effective or self.theme.resolve()
+
+    def toggle(self):
+        self.theme.set_mode('light' if self.effective() == 'dark' else 'dark')
+
+    def build_menu(self):
+        menu = QMenu(self)
+        group = QActionGroup(menu)
+        group.setExclusive(True)
+        for mode, label in THEME_MENU:
+            action = QAction(label, menu, checkable=True)
+            action.setChecked(self.theme.mode == mode)
+            action.triggered.connect(lambda _checked, m=mode: self.theme.set_mode(m))
+            group.addAction(action)
+            menu.addAction(action)
+        return menu
+
+    def refresh(self):
+        effective = self.effective()
+        color = QColor(THEMES[effective]['text_muted'])
+        self.setIcon(theme_icon(effective, color, 16, self.devicePixelRatioF()))
+        other = 'light' if effective == 'dark' else 'dark'
+        name = effective.capitalize()
+        if self.theme.mode == 'system':
+            state = f"{name} theme (following system)."
+        else:
+            state = f"{name} theme."
+        self.setToolTip(f"{state} Click for {other} (Ctrl+Shift+L), right-click for more.")
+
+
 # -----------------------------------------------------------------------------
 # Main window
 # -----------------------------------------------------------------------------
@@ -350,12 +486,18 @@ class DuplicateFinderApp(QMainWindow):
         self.resize(1400, 950)
         self.setAcceptDrops(True)
 
-        self.scan_folders = self.settings.folders
+        # The folder list is never saved (see fdf.settings); clear what 1.6.0 left.
+        self.settings.forget_legacy_folders()
+        self.scan_folders = []
         self.exact_groups = []
         self.issues = []
         self.current_match = None
         self.loaded_index = None          # set when the user picked a .db by hand
         self.last_db_path = None
+        # Index paths chosen in a dialog this session, by folder set. Memory only.
+        self._session_index = {}
+        self._results_threshold = None    # threshold the shown results came from
+        self._pending_threshold = None
         self.worker = None
         self.watchdog = None
         self.prune_worker = None
@@ -380,11 +522,15 @@ class DuplicateFinderApp(QMainWindow):
         self._resource_timer.timeout.connect(self._update_resources)
 
         self._build_menus()
-        self._build_status_bar()
         self._build_body()
+        # After the body, so the theme button is last in the tab order and
+        # never takes the window's initial focus.
+        self._build_status_bar()
 
-        self.theme.mode_changed.connect(self._sync_theme_controls)
-        self._sync_theme_controls(self.theme.mode)
+        toggle = QAction("Toggle Light/Dark Theme", self)
+        toggle.setShortcut(QKeySequence("Ctrl+Shift+L"))
+        toggle.triggered.connect(self.btn_theme.toggle)
+        self.addAction(toggle)
         self._restore_window_state()
         self.refresh_folder_table()
         self._update_actions()
@@ -411,14 +557,6 @@ class DuplicateFinderApp(QMainWindow):
         self._action(file_menu, "&Add Folder...", self.add_folder, "Ctrl+N")
         self._action(file_menu, "&Clear Folder List", self.clear_folders)
         file_menu.addSeparator()
-        self._action(file_menu, "&Load Index...", self.load_index, "Ctrl+O")
-        self.act_export = self._action(file_menu, "&Export Results...", self.export_results,
-                                       "Ctrl+E")
-        file_menu.addSeparator()
-        self._action(file_menu, "Open Index &Folder", lambda: open_path(index_dir()))
-        self.act_forget = self._action(file_menu, "&Delete Saved Index for These Folders",
-                                       self.forget_index)
-        file_menu.addSeparator()
         self._action(file_menu, "E&xit", self.close, QKeySequence.StandardKey.Quit)
 
         scan_menu = bar.addMenu("S&can")
@@ -428,32 +566,31 @@ class DuplicateFinderApp(QMainWindow):
                                         self.rematch, "F6",
                                         "Re-run matching on the existing index, e.g. after "
                                         "changing the threshold")
-        self.act_rebuild = self._action(scan_menu, "Re&build Index From Scratch",
-                                        self.rebuild_index)
         self.act_stop = self._action(scan_menu, "S&top", self.stop_scan, "Esc")
         scan_menu.addSeparator()
         self._action(scan_menu, "Scan &Options...", self.show_options, "Ctrl+,")
 
-        view_menu = bar.addMenu("&View")
-        theme_menu = view_menu.addMenu("&Theme")
-        group = QActionGroup(self)
-        group.setExclusive(True)
-        self._theme_actions = {}
-        for mode in MODES:
-            action = QAction(MODE_LABELS[mode], self, checkable=True)
-            action.triggered.connect(lambda _checked, m=mode: self.theme.set_mode(m))
-            group.addAction(action)
-            theme_menu.addAction(action)
-            self._theme_actions[mode] = action
+        index_menu = bar.addMenu("&Index")
+        self._action(index_menu, "&Load Index...", self.load_index, "Ctrl+O")
+        self._action(index_menu, "Index &Location...", self.show_index_options)
+        index_menu.addSeparator()
+        self._action(index_menu, "Open Index &Folder", self.open_index_folder)
+        index_menu.addSeparator()
+        self.act_rebuild = self._action(index_menu, "Re&build Index From Scratch",
+                                        self.rebuild_index)
+        self.act_forget = self._action(index_menu, "&Delete Saved Index for These Folders",
+                                       self.forget_index)
 
-        tools_menu = bar.addMenu("&Tools")
-        self.act_prune = self._action(tools_menu, "Auto-&Prune Exact Duplicates...",
+        results_menu = bar.addMenu("&Results")
+        self.act_export = self._action(results_menu, "&Export Results...", self.export_results,
+                                       "Ctrl+E")
+        self.act_prune = self._action(results_menu, "Auto-&Prune Exact Duplicates...",
                                       self.auto_prune_exact)
-        self.act_issues = self._action(tools_menu, "Files With &Issues...",
+        self.act_issues = self._action(results_menu, "Files With &Issues...",
                                        self.show_issues)
 
         help_menu = bar.addMenu("&Help")
-        self._action(help_menu, "Open &Log Folder", lambda: open_path(log_dir()))
+        self._action(help_menu, "Open &Log Folder", self.open_log_folder)
         self._action(help_menu, f"&About {APP_NAME}", self.show_about)
 
     def _build_status_bar(self):
@@ -470,6 +607,9 @@ class DuplicateFinderApp(QMainWindow):
         self.lbl_version.mousePressEvent = lambda _e: QDesktopServices.openUrl(QUrl(PROJECT_URL))
         self.status_bar.addPermanentWidget(self.lbl_version)
 
+        self.btn_theme = ThemeToggleButton(self.theme)
+        self.status_bar.addPermanentWidget(self.btn_theme)
+
     def _build_toolbar(self):
         toolbar = QFrame()
         toolbar.setObjectName("toolbar")
@@ -478,12 +618,10 @@ class DuplicateFinderApp(QMainWindow):
         row.setSpacing(6)
 
         btn_add = set_variant(QPushButton(" + Add Folder "), "neutral")
+        btn_add.setToolTip("Add a folder to scan (Ctrl+N). You can also drop folders on the list.")
         btn_add.clicked.connect(self.add_folder)
-        btn_clear = set_variant(QPushButton(" Clear List "), "neutral")
-        btn_clear.clicked.connect(self.clear_folders)
-        btn_load = set_variant(QPushButton(" Load Index... "), "neutral")
-        btn_load.clicked.connect(self.load_index)
         btn_options = set_variant(QPushButton(" Options... "), "neutral")
+        btn_options.setToolTip("Scan options and index location (Ctrl+,)")
         btn_options.clicked.connect(self.show_options)
 
         self.btn_scan = set_variant(QPushButton("  START SCAN  "), "primary")
@@ -505,11 +643,14 @@ class DuplicateFinderApp(QMainWindow):
         self.spin_threshold.setValue(int(round(self.settings.threshold)))
         self.spin_threshold.setToolTip(
             "Minimum similarity score for a fuzzy match. Lower finds more, with more\n"
-            "false positives. Use Scan > Re-match (F6) to apply it without rescanning."
+            "false positives. Re-match applies it without rescanning."
         )
-        self.spin_threshold.valueChanged.connect(
-            lambda v: setattr(self.settings, 'threshold', float(v))
-        )
+        self.spin_threshold.valueChanged.connect(self._threshold_changed)
+
+        self.btn_rematch = set_variant(QPushButton(" Re-match "), "neutral")
+        self.btn_rematch.setToolTip("Apply the threshold to the existing index without "
+                                    "rescanning (F6)")
+        self.btn_rematch.clicked.connect(self.rematch)
 
         cpu = os.cpu_count() or 4
         self.spin_workers = ThreadCountWidget(1, cpu * 2, min(self.settings.threads, cpu * 2))
@@ -519,8 +660,6 @@ class DuplicateFinderApp(QMainWindow):
         )
 
         row.addWidget(btn_add)
-        row.addWidget(btn_clear)
-        row.addWidget(btn_load)
         row.addWidget(btn_options)
         row.addSpacing(20)
         row.addWidget(self.btn_scan)
@@ -529,6 +668,7 @@ class DuplicateFinderApp(QMainWindow):
         row.addStretch()
         row.addWidget(set_role(QLabel("Threshold:"), "muted"))
         row.addWidget(self.spin_threshold)
+        row.addWidget(self.btn_rematch)
         row.addSpacing(12)
         row.addWidget(set_role(QLabel("Threads:"), "muted"))
         row.addWidget(self.spin_workers)
@@ -733,12 +873,6 @@ class DuplicateFinderApp(QMainWindow):
         self.settings.set_value("window/v_split", self.v_splitter.saveState())
         self.settings.set_value("window/h_split", self.h_splitter.saveState())
         self.settings.threads = self.spin_workers.value()
-        self.settings.folders = self.scan_folders
-
-    def _sync_theme_controls(self, mode):
-        action = self._theme_actions.get(mode)
-        if action is not None:
-            action.setChecked(True)
 
     # -------------------------------------------------------------------------
     # State
@@ -748,12 +882,33 @@ class DuplicateFinderApp(QMainWindow):
         return bool((self.worker and self.worker.isRunning())
                     or (self.prune_worker and self.prune_worker.isRunning()))
 
+    def _roots(self):
+        return [f['path'] for f in self.scan_folders]
+
     def _db_path(self):
+        """
+        The index for the current folders without asking anything: a file
+        loaded by hand, a path picked earlier this session, or an index that
+        already exists where the mode puts it. In app data mode the path is
+        returned even before the index exists, as before.
+        """
         if self.loaded_index:
             return self.loaded_index
         if not self.scan_folders:
             return None
-        return default_index_path([f['path'] for f in self.scan_folders])
+        roots = self._roots()
+        chosen = self._session_index.get(folder_set_key(roots))
+        if chosen:
+            return chosen
+        mode = self.settings.index_mode
+        found = existing_index(roots, mode, self.settings.index_custom_dir)
+        if found or mode != 'appdata':
+            return found
+        return default_index_path(roots)
+
+    def _threshold_changed(self, value):
+        self.settings.threshold = float(value)
+        self._update_actions()
 
     def _update_actions(self):
         busy = self._busy()
@@ -765,6 +920,9 @@ class DuplicateFinderApp(QMainWindow):
         self.act_scan.setEnabled(has_folders and not busy)
         self.act_rebuild.setEnabled(has_folders and not busy and has_index)
         self.act_rematch.setEnabled(has_index and not busy)
+        threshold_moved = (self._results_threshold is None
+                           or self.spin_threshold.value() != self._results_threshold)
+        self.btn_rematch.setEnabled(has_index and not busy and threshold_moved)
         self.act_forget.setEnabled(has_index and not busy and not self.loaded_index)
         self.btn_stop.setEnabled(bool(self.worker and self.worker.isRunning()))
         self.act_stop.setEnabled(self.btn_stop.isEnabled())
@@ -791,7 +949,7 @@ class DuplicateFinderApp(QMainWindow):
 
     def _folders_changed(self):
         self.refresh_folder_table()
-        self.settings.folders = self.scan_folders
+        self._results_threshold = None
         self._update_actions()
 
     def add_folder(self):
@@ -862,7 +1020,6 @@ class DuplicateFinderApp(QMainWindow):
         value = max(0, min(100, self.scan_folders[index]['priority'] + delta))
         self.scan_folders[index]['priority'] = value
         label.setText(str(value))
-        self.settings.folders = self.scan_folders
         db = self._db_path()
         if db and os.path.exists(db):
             try:
@@ -870,7 +1027,7 @@ class DuplicateFinderApp(QMainWindow):
                 index_db.save_roots(self.scan_folders)
                 index_db.close()
             except Exception:
-                log.exception("Could not save priorities to the index")
+                scan_logger.exception("Could not save priorities to the index")
 
     # -------------------------------------------------------------------------
     # Scanning
@@ -884,12 +1041,14 @@ class DuplicateFinderApp(QMainWindow):
             QMessageBox.warning(self, "Missing Folders",
                                 "These folders do not exist:\n\n" + "\n".join(missing))
             return
-        self._start_worker(skip_scan=False)
+        db_path = self._choose_index()
+        if db_path:
+            self._start_worker(False, db_path)
 
     def rematch(self):
         db = self._db_path()
         if db and os.path.exists(db) and not self._busy():
-            self._start_worker(skip_scan=True)
+            self._start_worker(True, db)
 
     def rebuild_index(self):
         db = self._db_path()
@@ -903,6 +1062,9 @@ class DuplicateFinderApp(QMainWindow):
             return
         if not self._remove_index(db):
             return
+        # Rebuild in the same place, without asking again.
+        if not self.loaded_index:
+            self._session_index[folder_set_key(self._roots())] = db
         self.start_scan()
 
     def forget_index(self):
@@ -912,27 +1074,124 @@ class DuplicateFinderApp(QMainWindow):
         confirm = QMessageBox.question(
             self, "Delete Saved Index",
             f"Delete the saved index for these folders?\n\n{db}\n\n"
-            "The next scan will re-read every file.",
+            "Its scan log is deleted too, if it has one. The next scan will re-read "
+            "every file.",
         )
-        if confirm == QMessageBox.StandardButton.Yes and self._remove_index(db):
+        if confirm == QMessageBox.StandardButton.Yes and self._remove_index(db, with_log=True):
+            self._session_index.pop(folder_set_key(self._roots()), None)
             self.lbl_status.setText("Saved index deleted.")
         self._update_actions()
 
-    def _remove_index(self, db):
-        for path in index_files(db):
+    def _remove_index(self, db, with_log=False):
+        paths = list(index_files(db))
+        log_path = scan_log_path(db) if with_log else None
+        if log_path:
+            paths += [log_path] + [f"{log_path}.{n}" for n in range(1, 10)]
+        for path in paths:
             try:
                 if os.path.exists(path):
                     os.remove(path)
             except OSError as exc:
                 QMessageBox.warning(self, "Index", f"Could not delete {path}: {exc}")
                 return False
+        if log_path:
+            try:
+                os.rmdir(os.path.dirname(log_path))   # only if now empty
+            except OSError:
+                pass
         return True
+
+    # -- choosing where the index goes -------------------------------------
+
+    def _choose_index(self):
+        """
+        Index path for a scan of the current folders, asking whatever the
+        index location setting needs. None means the user cancelled. Nothing
+        ever falls back to the app data folder on its own: that would put
+        paths from one disk onto another.
+        """
+        if self.loaded_index:
+            return self.loaded_index
+        roots = self._roots()
+        key = folder_set_key(roots)
+        if key in self._session_index:
+            return self._session_index[key]
+        choice = resolve_index(roots, self.settings.index_mode, self.settings.index_custom_dir)
+        path, problem, folder = choice.path, choice.problem, choice.folder
+
+        if problem == 'holder':
+            holder = self._ask_index_holder(roots)
+            if not holder:
+                return None
+            path = folder_index_path(holder, roots)
+            problem = None if dir_writable(holder) else 'unwritable'
+            folder = holder
+            self._session_index[key] = path
+
+        if problem == 'ask':
+            path = self._ask_index_file(path, "Index File for These Folders")
+            if not path:
+                return None
+            self._session_index[key] = path
+        elif problem == 'unwritable':
+            path = self._ask_other_location(folder, roots)
+            if not path:
+                return None
+            self._session_index[key] = path
+        return path
+
+    def _ask_index_holder(self, roots):
+        """Folders on different disks: the user picks which one keeps the index."""
+        holder, ok = QInputDialog.getItem(
+            self, "Index Location",
+            "These folders are on different disks. Which one should hold the index?\n\n"
+            "The index lists the file paths of all of them, so pick the disk those\n"
+            "paths are safe on.",
+            roots, 0, False,
+        )
+        return holder if ok and holder else None
+
+    def _ask_index_file(self, suggestion, title):
+        """Save dialog for an index file. Existing files are reused, not
+        overwritten, so there is no overwrite prompt."""
+        path, _ = QFileDialog.getSaveFileName(
+            self, title, suggestion, "Index Files (*.db);;All Files (*)",
+            options=QFileDialog.Option.DontConfirmOverwrite,
+        )
+        if not path:
+            return None
+        if not os.path.splitext(path)[1]:
+            path += ".db"
+        if not dir_writable(os.path.dirname(path) or "."):
+            QMessageBox.warning(self, "Index Location",
+                                f"This folder cannot be written to:\n\n{os.path.dirname(path)}")
+            return None
+        return path
+
+    def _ask_other_location(self, folder, roots):
+        if folder:
+            text = (f"The index cannot be written to:\n\n{folder}\n\n"
+                    "Choose another location for this set of folders? Nothing is written "
+                    "anywhere else unless you pick it.")
+        else:
+            text = ("No folder is set for index files. Choose one in Index > Index Location, "
+                    "or pick a location for this set of folders now.")
+        box = QMessageBox(QMessageBox.Icon.Warning, "Index Location", text, parent=self)
+        choose = box.addButton("Choose Another Location...", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.exec()
+        if box.clickedButton() is not choose:
+            return None
+        return self._ask_index_file(default_index_path(roots), "Index File for These Folders")
 
     def load_index(self):
         if self._busy():
             return
+        current = self._db_path()
+        start = os.path.dirname(current) if current else index_dir()
         db_path, _ = QFileDialog.getOpenFileName(
-            self, "Load Existing Index", index_dir(), "Index Files (*.db);;All Files (*)"
+            self, "Load Existing Index", start,
+            "Index Files (*.db);;All Files (*)",
         )
         if not db_path:
             return
@@ -947,13 +1206,30 @@ class DuplicateFinderApp(QMainWindow):
         if roots:
             self.scan_folders = roots
             self._folders_changed()
-        self._start_worker(skip_scan=True)
+        self._start_worker(True, db_path)
 
-    def _start_worker(self, skip_scan):
-        db_path = self._db_path()
+    def show_index_options(self):
+        OptionsDialog(self.settings, self, focus="index").exec()
+        self._update_actions()
+
+    def open_index_folder(self):
+        db = self._db_path()
+        if db:
+            folder = os.path.dirname(db)
+        elif self.settings.index_mode == 'custom' and self.settings.index_custom_dir:
+            folder = self.settings.index_custom_dir
+        else:
+            folder = index_dir()
+        open_path(folder)
+
+    def open_log_folder(self):
+        open_path(scan_log_folder(self._db_path()) or log_dir())
+
+    def _start_worker(self, skip_scan, db_path):
         if not db_path:
             return
         self.last_db_path = db_path
+        self._pending_threshold = int(self.spin_threshold.value())
         self.model.set_matches([])
         self.exact_groups = []
         self.issues = []
@@ -1022,6 +1298,7 @@ class DuplicateFinderApp(QMainWindow):
                 QMessageBox.warning(self, "Scan Stopped", results.abort_reason)
             return
 
+        self._results_threshold = self._pending_threshold
         self.exact_groups = results.exact_groups
         self.model.set_matches(results.matches)
         self._apply_filter()
@@ -1070,6 +1347,7 @@ class DuplicateFinderApp(QMainWindow):
 
     def show_options(self):
         OptionsDialog(self.settings, self).exec()
+        self._update_actions()
 
     def _update_resources(self):
         alert = False
@@ -1280,7 +1558,7 @@ class DuplicateFinderApp(QMainWindow):
                 index_db.delete_paths(gone)
                 index_db.close()
             except Exception:
-                log.exception("Could not remove trashed files from the index")
+                scan_logger.exception("Could not remove trashed files from the index")
         if self.model.rowCount() == 0:
             self._clear_panels()
             self.lbl_status.setText("No more matches.")
@@ -1440,8 +1718,21 @@ class DuplicateFinderApp(QMainWindow):
             "<p>Find exact and visually, acoustically or textually similar duplicate "
             "files.</p>"
             f"<p><a href='{PROJECT_URL}'>{PROJECT_URL}</a></p>"
-            f"<p>Index folder:<br>{index_dir()}</p>",
+            f"<p>{self._index_description()}</p>",
         )
+
+    def _index_description(self):
+        db = self._db_path()
+        if db and os.path.exists(db):
+            return f"Index for these folders:<br>{html.escape(db)}"
+        mode = self.settings.index_mode
+        if mode == 'folder':
+            return "Indexes are kept inside the scanned folder."
+        if mode == 'custom':
+            return f"Index folder:<br>{html.escape(self.settings.index_custom_dir)}"
+        if mode == 'ask':
+            return "The index location is asked for each new set of folders."
+        return f"Index folder:<br>{html.escape(index_dir())}"
 
 
 def main(argv=None):

@@ -13,7 +13,7 @@ Fuzzy Duplicate Finder finds exact copies and near-copies of your photos, videos
 - Exact duplicates of any file, found by MD5. Only files that share a size and a head/tail hash are read in full, so most of a library is never read end to end.
 - Similar images (perceptual hash, EXIF rotation applied), similar videos (four-frame montage hash plus duration), similar audio (chroma fingerprint plus duration, so re-encodes at other bitrates and formats match) and similar text (SimHash over the content).
 - A similarity score for every pair, with an adjustable threshold. Re-match with a new threshold without rescanning.
-- Incremental scans. Each set of folders gets its own saved index, and unchanged files are never re-read.
+- Incremental scans. Each set of folders gets its own saved index, and unchanged files are never re-read. The index can live in the app's data folder, inside the scanned folder (so an encrypted disk's file paths stay on that disk), in a folder you choose, or wherever you say each time.
 - Side-by-side previews that load in the background, including the first lines of text files.
 - Delete A, delete B, delete both or skip, with keyboard shortcuts. Everything goes to the Trash or Recycle Bin.
 - Auto-prune for exact duplicates, keeping the copy in your highest-priority folder, with a full list of what goes and what stays before anything moves.
@@ -21,7 +21,7 @@ Fuzzy Duplicate Finder finds exact copies and near-copies of your photos, videos
 - Filters: skip hidden files, exclude folders by name or pattern, set a minimum size, pick which kinds of files to compare.
 - Results filter and search, CSV and JSON export.
 - A command line mode for scripted or headless scans.
-- Light and dark themes, plus System, which follows your desktop.
+- Light and dark themes, switched with the sun/moon button in the bottom-right corner, plus System, which follows your desktop.
 
 ## Supported file types
 
@@ -52,6 +52,8 @@ Prerequisites: a desktop from roughly 2022 or newer (glibc 2.35+).
 1. Download `FuzzyDuplicateFinder-<version>-windows-x64.exe` from the [Releases page](../../releases/latest).
 2. Run it. It is a single portable EXE with nothing to install. It is not code-signed, so SmartScreen may ask you to confirm the first time.
 
+Upgrading from 1.6.0: if you pinned 1.6.0 to the taskbar, unpin it and pin 1.7.0 once. 1.7.0 gives itself a fixed taskbar identity, which is what fixed the missing taskbar icon, and an old pin shows up as a separate button.
+
 ### macOS
 
 1. Download `FuzzyDuplicateFinder-<version>-macos-arm64.zip` from the [Releases page](../../releases/latest) and unzip it.
@@ -80,6 +82,8 @@ Prerequisites: Python 3.10 or newer, and `ffmpeg` if you want `.m4a`/`.aac`/`.wm
 
 | Key | Action |
 |-----|--------|
+| Ctrl+N | Add folder |
+| Ctrl+O | Load index |
 | F5 | Start scan |
 | F6 | Re-match without scanning |
 | Esc | Stop |
@@ -89,10 +93,11 @@ Prerequisites: Python 3.10 or newer, and `ffmpeg` if you want `.m4a`/`.aac`/`.wm
 | Alt+O | Delete both |
 | Ctrl+E | Export results |
 | Ctrl+, | Scan options |
+| Ctrl+Shift+L | Switch between light and dark |
 
 ### Threshold
 
-The **Threshold** box sets the lowest score a similar pair needs to be listed. 70% is the default. Lower it to catch heavier edits, raise it if you see false matches. Changing it does nothing until you re-match: press F6 (Scan > Re-match Without Scanning), which reuses the index and takes seconds.
+The **Threshold** box sets the lowest score a similar pair needs to be listed. 70% is the default. Lower it to catch heavier edits, raise it if you see false matches. Changing it does nothing until you re-match: click **Re-match** next to the box, or press F6. It reuses the index and takes seconds. The button lights up when the threshold differs from the one the listed results came from.
 
 ### Scan options
 
@@ -103,22 +108,47 @@ The **Threshold** box sets the lowest score a similar pair needs to be listed. 7
 - Skipping hidden files and folders (on by default), an exclude list (`node_modules`, `.git`, trash folders and similar by default), and a minimum file size. Empty files are always skipped, since every empty file is "identical" to every other.
 - Background CPU priority for scans, the memory watchdog, and how long a file can take before it gets flagged.
 - Whether to confirm before each delete. Turn it off for fast review sessions.
+- Where indexes are kept. See "The index" below.
+
+### Theme
+
+The sun or moon at the bottom-right corner, next to the version number, shows the current theme. Click it to switch between light and dark (Ctrl+Shift+L does the same). Right-click it for Light, Dark, or Follow system, which tracks your desktop's setting and is the default.
 
 ### The index
 
-Every scan writes a small database for its set of folders, under:
+Every scan writes a small database for its set of folders. Scanning the same folders again only reads new and changed files, so a rescan of an untouched library takes seconds. Where that database goes is set under **Index > Index Location** (also in Options):
+
+| Setting | Where the index goes | File name |
+|---------|----------------------|-----------|
+| App data folder (default) | the `indexes` folder listed below | `index-<id>.db` |
+| Inside the scanned folder | the first folder in the list | `.fdf-index-<id>.db` |
+| A folder I choose | that folder | `fdf-index-<id>.db` |
+| Ask each time | wherever you pick, asked once per set of folders per session | your choice |
+
+The app data folder is:
 
 - Linux: `~/.local/share/FuzzyDuplicateFinder/indexes/`
 - Windows: `%LOCALAPPDATA%\FuzzyDuplicateFinder\indexes\`
 - macOS: `~/Library/Application Support/FuzzyDuplicateFinder/indexes/`
 
-Scanning the same folders again only reads new and changed files, so a rescan of an untouched library takes seconds. **File > Delete Saved Index for These Folders** throws it away, and **Scan > Rebuild Index From Scratch** throws it away and rescans. **Load Index...** opens any index by hand, including ones made by version 1.5 and earlier. Old indexes are upgraded in place; their video and audio fingerprints are recomputed on the next scan.
+Why keep it inside the scanned folder? Because an index lists the name and full path of every file it covers. If you scan an encrypted disk with the default setting, that list ends up on your system disk, which may not be encrypted. Inside the scanned folder, the list stays on the disk it describes. A few rules follow from that:
+
+- If the folders are on different disks, the first scan asks which folder holds the index. It lists paths from all of them, so pick the disk those paths are safe on. Later scans find it on their own.
+- If the index location cannot be written to (a read-only share, a disc, permissions), the scan does not start. You get the choice of another location for this set of folders, or Cancel. NOTHING FALLS BACK TO THE APP DATA FOLDER ON ITS OWN, in any setting.
+- The scan log goes beside the index, in a `.fdf-logs` folder (`fdf-logs` for a folder you chose), instead of the app's log folder. It is a complete log with full paths, just stored with the data it describes.
+- Paths in the index are absolute. If the disk mounts somewhere else next time, the next scan builds a new index beside the old one, which you can delete.
+
+The folder list is not saved between sessions in any setting, so no folder names stay behind in the app's settings. To pick up where you left off, either add the same folders again, which finds the same index, or use **Index > Load Index...**, which brings back the folders and their priorities.
+
+Changing the setting does not move existing indexes. **Index > Load Index...** (Ctrl+O) opens any index by hand, including ones made by version 1.5 and earlier. Old indexes are upgraded in place; their video and audio fingerprints are recomputed on the next scan.
+
+**Index > Delete Saved Index for These Folders** throws the index away, with its scan log. **Index > Rebuild Index From Scratch** throws it away and rescans. **Index > Open Index Folder** opens the folder the current index is in.
 
 ### Folder priorities and auto-prune
 
 Each folder has a priority, 10 by default, set with the arrows in the folder table.
 
-**Tools > Auto-Prune Exact Duplicates** keeps one copy of every exact duplicate group and moves the rest to the Trash. The copy kept is the one in the highest-priority folder. Ties go to the shortest path, then alphabetical order, so the result is the same every time. With nested folders, the most specific folder's priority counts. The confirmation dialog's **Show Details** lists every file that will move and the copy it is a duplicate of.
+**Results > Auto-Prune Exact Duplicates** keeps one copy of every exact duplicate group and moves the rest to the Trash. The copy kept is the one in the highest-priority folder. Ties go to the shortest path, then alphabetical order, so the result is the same every time. With nested folders, the most specific folder's priority counts. The confirmation dialog's **Show Details** lists every file that will move and the copy it is a duplicate of.
 
 Auto-prune never touches similar-but-not-identical files. Those always need a look from you.
 
@@ -145,9 +175,20 @@ FuzzyDuplicateFinder scan /srv/share --exact-only --json report.json
 FuzzyDuplicateFinder scan --help
 ```
 
-From source it is `python main.py scan ...`. The CLI uses the same per-folder index as the GUI, so either one makes the other's next scan incremental. On Windows the EXE is a GUI program with no console, so the CLI only writes its `--csv`/`--json` files there; run it from source if you want the terminal output.
+From source it is `python main.py scan ...`. The CLI follows the Index Location set in the GUI, so either one makes the other's next scan incremental. These override it for one run:
 
-The log file is in the `logs` folder next to `indexes` (Help > Open Log Folder).
+| Option | Index goes |
+|--------|-----------|
+| `--db FILE` | in that file |
+| `--index-appdata` | in the app data folder |
+| `--index-in-folder` | inside the scanned folder |
+| `--index-dir DIR` | in DIR |
+
+Where the GUI would ask something (Ask each time, folders on different disks, a location that cannot be written to), the CLI asks on the terminal. Run from a script with no terminal, it exits with code 2 and names the options above instead of waiting or guessing. It also exits with code 2 if a folder does not exist.
+
+On Windows the EXE is a GUI program with no console, so the CLI only writes its `--csv`/`--json` files there, and cannot ask questions; run it from source if you want the terminal output.
+
+The app log is in the `logs` folder next to `indexes`. Scans whose index lives anywhere else log beside that index instead. **Help > Open Log Folder** opens the scan log folder for the current folders when they have one, otherwise the app log folder.
 
 ## How scoring works
 
@@ -189,7 +230,7 @@ At the default 70% threshold, 1.6.0 finds the byte copy, re-saves, format change
 
 ### Building
 
-To build locally: `pyinstaller --noconfirm FuzzyDuplicateFinder.spec`. On Linux, `bash .github/scripts/build-appimage.sh 1.6.0` then wraps `dist/FuzzyDuplicateFinder/` in an AppImage.
+To build locally: `pyinstaller --noconfirm FuzzyDuplicateFinder.spec`. On Linux, `bash .github/scripts/build-appimage.sh 1.7.0` then wraps `dist/FuzzyDuplicateFinder/` in an AppImage.
 
 ## Making a release
 
@@ -222,12 +263,14 @@ FuzzyDuplicateFinder/
 │   ├── watchdog.py               memory/CPU watchdog, stalled-file tracking
 │   ├── cli.py                    command line mode
 │   ├── export.py                 CSV and JSON
-│   ├── paths.py                  per-user data, cache and index locations
+│   ├── paths.py                  per-user data, cache and index locations, index location modes
+│   ├── logs.py                   app log, and scan logs beside indexes outside app data
 │   ├── gui.py                    main window
 │   ├── preview.py                background preview loading
 │   ├── dialogs.py                options and issues dialogs
 │   ├── settings.py               persisted settings
-│   └── theme.py                  light/dark tokens, stylesheet, system detection
+│   ├── theme.py                  light/dark tokens, stylesheet, system detection
+│   └── buildinfo.py              Windows version resource values, used by the build only
 ├── tests/                        pytest suite
 ├── test-images/
 │   ├── images/                   200 graded test images

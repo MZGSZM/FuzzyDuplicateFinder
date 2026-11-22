@@ -43,7 +43,7 @@ from .index import (
     P_VISUAL,
     Index,
 )
-from .paths import index_files, normalize_root
+from .paths import INTERNAL_FILE_PATTERN, SCAN_LOG_DIRS, index_files, normalize_root
 
 log = logging.getLogger(__name__)
 
@@ -111,6 +111,15 @@ class _Filter:
         self.min_size = max(0, int(options.min_size or 0))
         self.skip_paths = {normalize_root(p) for p in skip_paths}
 
+    @staticmethod
+    def internal(entry):
+        """The app's own files: other folder sets' indexes and scan log
+        folders. Skipped whatever the exclude list or hidden setting says, so a
+        scan never reports one index as a duplicate of another or fingerprints
+        its own log while writing it."""
+        name = entry.name.lower()
+        return name in SCAN_LOG_DIRS or fnmatch.fnmatchcase(name, INTERNAL_FILE_PATTERN)
+
     def excluded(self, entry):
         name = os.path.normcase(entry.name)
         if self._name_re is not None and self._name_re.match(name):
@@ -170,7 +179,8 @@ def iter_files(roots, options, stop_signal=None, skip_paths=()):
         with it:
             for entry in it:
                 try:
-                    if entry.is_symlink() or _is_junction(entry) or filt.excluded(entry):
+                    if entry.is_symlink() or _is_junction(entry) or filt.internal(entry) \
+                            or filt.excluded(entry):
                         continue
                     if entry.is_dir(follow_symlinks=False):
                         stack.append(entry.path)

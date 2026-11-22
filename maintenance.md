@@ -81,11 +81,21 @@ If you change how any fuzzy fingerprint is computed (image, video, audio or text
 
 If you add a column to the index, add it to `COLUMNS` in `fdf/index.py`. Existing indexes get it automatically through `ALTER TABLE`. `test_index_upgrades_old_schema` covers the upgrade path from 1.5 indexes.
 
-## 8. Test images
+## 8. Things that must not change
+
+- **`WINDOWS_APP_USER_MODEL_ID` in `fdf/__init__.py`.** It is the app's identity on the Windows taskbar. Changing it splits every existing taskbar pin from the running app, and brings back the path-dependent missing icon for anyone whose pin still points at the old identity. Leave it alone forever.
+- **Index file names** (`index-<id>.db`, `.fdf-index-<id>.db`, `fdf-index-<id>.db`) and the id from `folder_set_key()` in `fdf/paths.py`. Changing either makes every existing index invisible, so every user's next scan starts from zero.
+- **The no-fallback rule for index locations.** `resolve_index()` returns a problem instead of a path whenever it cannot use the configured location, and the GUI and CLI ask. Never add a silent fallback to the app data folder: the in-folder mode exists so file paths from an encrypted disk do not land on another disk. The same goes for scan logs: `fdf.logs.scan_log()` drops messages it cannot write beside the index rather than sending them to the app log. Any new module that logs file paths during a scan must be listed in `SCAN_LOGGERS` in `fdf/logs.py`, or its messages go to the app log in app data.
+
+## 9. Windows version resource
+
+The Windows build carries a version resource (Explorer's Properties > Details tab) built in `FuzzyDuplicateFinder.spec` from `fdf/buildinfo.py`. The release workflow checks that the EXE's ProductVersion matches the tag. If that check fails after a PyInstaller upgrade, look at `PyInstaller.utils.win32.versioninfo`: the spec builds a `VSVersionInfo` from its classes, and their constructor arguments are what could change.
+
+## 10. Test images
 
 After any change to fingerprints or scoring, scan `test-images/images` and compare against its `manifest.csv`. If the results moved on purpose, refresh the manifest's measured columns with `python3 test-images/generate_test_images.py /tmp/fresh .` and copy `/tmp/fresh/manifest.csv` over the old one. The images come out identical, so only the scores change. Then update the "Test images" section of the README with the new results.
 
-## 9. Scripts
+## 11. Scripts
 
 All shell scripts must pass shellcheck, which CI enforces:
 
@@ -93,6 +103,6 @@ All shell scripts must pass shellcheck, which CI enforces:
 shellcheck .github/scripts/*.sh packaging/appimage/AppRun tools/*.sh
 ```
 
-## 10. Record what you did
+## 12. Record what you did
 
 Add an entry to `changes.md` for anything you changed, even if it is only dependency minimums or a workflow bump, so the next release summary picks it up.

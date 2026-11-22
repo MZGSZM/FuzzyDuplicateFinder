@@ -1,3 +1,24 @@
+2026.11.22 - UX overhaul / Bug fixes / Privacy
+
+* Version 1.7.0.
+* Windows: the taskbar icon no longer goes missing depending on which folder the EXE runs from. The app now sets a fixed AppUserModelID at startup, so Windows stops tying its taskbar identity and icon to the EXE's path. If you pinned 1.6.0 to the taskbar, unpin it and pin 1.7.0 once.
+* Windows: the EXE carries a version resource, so Explorer's Properties > Details tab shows the product name and version. The release workflow checks it matches the tag.
+* Theme: the View menu is gone. A sun/moon button at the bottom-right corner, next to the version number, switches between light and dark on click (Ctrl+Shift+L), and its right-click menu offers Light, Dark and Follow system. The icons are drawn at runtime in the theme's own colour.
+* Toolbar: Clear List and Load Index moved to the menus only, since each folder row has its own remove button and indexes are found automatically. A Re-match button sits next to Threshold and lights up when the threshold differs from the one the listed results came from.
+* Menus: new Index menu (Load Index, Index Location, Open Index Folder, Rebuild Index From Scratch, Delete Saved Index). Tools is renamed Results and now holds Export Results too. Every shortcut is unchanged.
+* Index location setting with four modes: the app data folder (default, as in 1.6.0), inside the scanned folder, a folder you choose, or ask each time. In-folder mode keeps an encrypted disk's file paths on that disk.
+* Folders on different disks: the first in-folder scan asks which folder holds the index. Later scans find it in whichever folder it is in.
+* A location that cannot be written to stops the scan and offers another location or Cancel. Nothing ever falls back to the app data folder on its own.
+* Outside the app data folder, each scan logs to a `fdf-logs` (or `.fdf-logs`) folder beside its index instead of the app log. Delete Saved Index removes that log too. Help > Open Log Folder opens the scan log folder when there is one.
+* The scanner never indexes the app's own files: other folder sets' indexes and scan log folders are skipped whatever the exclude list says.
+* The folder list is no longer saved between sessions, and the copy 1.6.0 saved is deleted on first start. Re-adding the same folders finds the same index; Load Index brings back the folders and their priorities.
+* Command line: follows the GUI's Index Location setting. `--index-appdata`, `--index-in-folder` and `--index-dir DIR` override it next to `--db`. Where the GUI would ask, the CLI asks on the terminal, or exits with code 2 and names the options when there is no terminal. A folder that does not exist is now an error (exit code 2) instead of a scan of nothing.
+* About dialog shows the current index file, or where indexes go.
+* Tests for index resolution in every mode, scan log routing, the internal-file skip rule, CLI overrides and prompts, the theme button, the menu layout, the Re-match button, and the version numbers derived from tags.
+* README and maintenance.md updated: index location, theme button, menu names, CLI options, and a list of things that must never change (the taskbar ID, index file names, the no-fallback rule).
+
+Reasons for changes: the taskbar icon bug, a less cluttered window, and keeping file paths from encrypted disks off other disks, in the index, the logs and the settings alike.
+
 2026.11.20 - Test data
 
 * Added FuzzyDuplicateFinder-test-images/: 200 generated images in 10 groups, graded from a byte-identical copy down to an unrelated scene, with manifest.csv recording what each file is and the score 1.6.0 gave it, and generate_test_images.py to rebuild the set.

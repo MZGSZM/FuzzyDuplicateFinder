@@ -127,6 +127,12 @@ jobs:
             Write-Error "Smoke test failed with exit code $($proc.ExitCode)"
             exit 1
           }
+          # Explorer's Properties > Details tab reads this resource.
+          $info = (Get-Item dist\FuzzyDuplicateFinder.exe).VersionInfo
+          if ($info.ProductVersion -ne $env:VERSION -or $info.ProductName -ne 'Fuzzy Duplicate Finder') {
+            Write-Error "Version resource is '$($info.ProductName)' '$($info.ProductVersion)', expected $env:VERSION"
+            exit 1
+          }
           New-Item -ItemType Directory -Force out | Out-Null
           Move-Item dist\FuzzyDuplicateFinder.exe "out\FuzzyDuplicateFinder-$env:VERSION-windows-x64.exe"
 

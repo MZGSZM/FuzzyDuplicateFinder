@@ -63,6 +63,39 @@ a = Analysis(
 
 pyz = PYZ(a.pure, a.zipped_data)
 
+
+def windows_version_info():
+    """
+    Version resource for Explorer's Properties > Details tab, built from
+    fdf/_version.py. The release workflow writes the tag there before building,
+    so a release exe always carries its own tag.
+    """
+    from PyInstaller.utils.win32.versioninfo import (
+        FixedFileInfo,
+        StringFileInfo,
+        StringStruct,
+        StringTable,
+        VarFileInfo,
+        VarStruct,
+        VSVersionInfo,
+    )
+
+    sys.path.insert(0, SPECPATH)  # noqa: F821  (defined by PyInstaller)
+    from fdf.buildinfo import numeric_version, version_strings
+
+    numbers = numeric_version()
+    return VSVersionInfo(
+        ffi=FixedFileInfo(filevers=numbers, prodvers=numbers),
+        kids=[
+            # 0409 = US English, 04B0 = Unicode.
+            StringFileInfo([StringTable('040904B0', [
+                StringStruct(key, value) for key, value in version_strings().items()
+            ])]),
+            VarFileInfo([VarStruct('Translation', [0x0409, 1200])]),
+        ],
+    )
+
+
 if is_windows:
     exe = EXE(
         pyz,
@@ -81,6 +114,7 @@ if is_windows:
         console=False,
         disable_windowed_traceback=False,
         icon=exe_icon,
+        version=windows_version_info(),
     )
 else:
     exe = EXE(

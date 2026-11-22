@@ -252,6 +252,12 @@ QLabel[role="muted"] {{ color: {t['text_muted']}; }}
 QLabel[role="status"] {{ color: {t['text_muted']}; font-weight: bold; margin-left: 10px; }}
 QLabel[role="version"] {{ color: {t['text_faint']}; font-size: 10px; margin-right: 10px; }}
 QLabel[role="version"]:hover {{ color: {t['link']}; }}
+QToolButton#themeToggle {{
+    background: transparent; border: 1px solid transparent; border-radius: 4px;
+    padding: 1px; margin-right: 6px;
+}}
+QToolButton#themeToggle:hover {{ background-color: {t['neutral']}; }}
+QToolButton#themeToggle:focus {{ border-color: {t['accent']}; }}
 QLabel[role="stepper"] {{ color: {t['text']}; font-weight: bold; min-width: 24px; }}
 QLabel[role="panelTitle"] {{ color: {t['text_muted']}; font-weight: bold; }}
 QLabel[role="filename"] {{ color: {t['text']}; font-size: 14px; font-weight: bold; }}

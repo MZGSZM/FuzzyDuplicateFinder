@@ -1,17 +1,26 @@
-"""Typed access to the persisted GUI settings."""
+"""
+Typed access to the persisted settings. The GUI writes them; the CLI reads the
+index location from here too, so both put an index in the same place.
+
+The scan folder list is deliberately not stored: settings live on the system
+disk, and folder names from an encrypted disk should not stay behind there.
+"""
 
 from __future__ import annotations
 
-import json
 import os
 
 from PyQt6.QtCore import QSettings
 
 from .exts import KINDS
 from .matcher import DEFAULT_THRESHOLD
+from .paths import DEFAULT_INDEX_MODE, INDEX_MODES
 from .scanner import DEFAULT_EXCLUDES, ScanOptions
 
 ORG = "FuzzyDuplicateFinder"
+
+# 1.6.0 kept the folder list here. Removed on first start of 1.7.0.
+LEGACY_FOLDERS_KEY = "session/folders"
 
 
 def _bool(value, default):
@@ -22,9 +31,19 @@ def _bool(value, default):
     return str(value).lower() in ("1", "true", "yes")
 
 
+def default_qsettings():
+    """The user's settings. FDF_DATA_DIR (used by the tests) points them at an
+    ini file inside that folder instead."""
+    override = os.environ.get("FDF_DATA_DIR")
+    if override:
+        os.makedirs(override, exist_ok=True)
+        return QSettings(os.path.join(override, "settings.ini"), QSettings.Format.IniFormat)
+    return QSettings(ORG, ORG)
+
+
 class AppSettings:
     def __init__(self, qsettings=None):
-        self.q = qsettings or QSettings(ORG, ORG)
+        self.q = qsettings or default_qsettings()
 
     # -- scan options -------------------------------------------------------
 
@@ -120,26 +139,33 @@ class AppSettings:
             max_workers=threads,
         )
 
-    # -- folders ------------------------------------------------------------
+    # -- index location -----------------------------------------------------
 
     @property
-    def folders(self):
-        raw = self.q.value("session/folders")
-        if not raw:
-            return []
-        try:
-            data = json.loads(raw)
-        except (TypeError, ValueError):
-            return []
-        out = []
-        for item in data:
-            if isinstance(item, dict) and isinstance(item.get('path'), str):
-                out.append({'path': item['path'], 'priority': int(item.get('priority', 10))})
-        return out
+    def index_mode(self):
+        value = str(self.q.value("index/mode", DEFAULT_INDEX_MODE))
+        return value if value in INDEX_MODES else DEFAULT_INDEX_MODE
 
-    @folders.setter
-    def folders(self, value):
-        self.q.setValue("session/folders", json.dumps(value))
+    @index_mode.setter
+    def index_mode(self, value):
+        self.q.setValue("index/mode", value if value in INDEX_MODES else DEFAULT_INDEX_MODE)
+
+    @property
+    def index_custom_dir(self):
+        value = self.q.value("index/custom_dir", "")
+        return str(value) if value else ""
+
+    @index_custom_dir.setter
+    def index_custom_dir(self, value):
+        self.q.setValue("index/custom_dir", value or "")
+
+    def forget_legacy_folders(self):
+        """Drop the folder list 1.6.0 saved. Returns True if there was one."""
+        if self.q.contains(LEGACY_FOLDERS_KEY):
+            self.q.remove(LEGACY_FOLDERS_KEY)
+            self.q.sync()
+            return True
+        return False
 
     # -- window state -------------------------------------------------------
 

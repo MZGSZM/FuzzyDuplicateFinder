@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import os
+
 from PyQt6.QtWidgets import (
     QApplication,
+    QButtonGroup,
     QCheckBox,
     QDialog,
     QDialogButtonBox,
@@ -16,6 +19,7 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QRadioButton,
     QSpinBox,
     QTreeWidget,
     QTreeWidgetItem,
@@ -29,8 +33,22 @@ from .scanner import DEFAULT_EXCLUDES
 KIND_LABELS = {'image': "Images", 'video': "Videos", 'audio': "Audio", 'text': "Text and code"}
 
 
+INDEX_MODE_CHOICES = (
+    ("appdata", "App data folder (default)",
+     "One index per set of folders, kept in the app's own data folder."),
+    ("folder", "Inside the scanned folder",
+     "The index and the scan log go in the first folder of the set, so file paths\n"
+     "stay on the same disk as the files. Useful for encrypted disks. If the folders\n"
+     "are on different disks, the first scan asks which one holds the index."),
+    ("custom", "A folder I choose:",
+     "Every index goes in this folder, with its scan log beside it."),
+    ("ask", "Ask each time I scan a new set of folders",
+     "A save dialog once per set of folders per session. The choice is not saved."),
+)
+
+
 class OptionsDialog(QDialog):
-    def __init__(self, settings, parent=None):
+    def __init__(self, settings, parent=None, focus=None):
         super().__init__(parent)
         self.settings = settings
         self.setWindowTitle("Scan Options")
@@ -118,11 +136,66 @@ class OptionsDialog(QDialog):
         review_layout.addWidget(self.chk_confirm)
         layout.addWidget(review)
 
+        layout.addWidget(self._build_index_group(settings))
+
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
                                    | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+        if focus == "index":
+            self.index_radios[settings.index_mode].setFocus()
+
+    def _build_index_group(self, settings):
+        group = QGroupBox("Index location")
+        group_layout = QVBoxLayout(group)
+        self.index_buttons = QButtonGroup(self)
+        self.index_radios = {}
+        for mode, label, tip in INDEX_MODE_CHOICES:
+            radio = QRadioButton(label)
+            radio.setToolTip(tip)
+            self.index_buttons.addButton(radio)
+            self.index_radios[mode] = radio
+            group_layout.addWidget(radio)
+            if mode == "custom":
+                row = QHBoxLayout()
+                row.setContentsMargins(24, 0, 0, 0)
+                self.edit_index_dir = QLineEdit(settings.index_custom_dir)
+                self.edit_index_dir.setPlaceholderText("Folder for index files")
+                btn_browse = QPushButton("Browse...")
+                btn_browse.clicked.connect(self._browse_index_dir)
+                row.addWidget(self.edit_index_dir, 1)
+                row.addWidget(btn_browse)
+                group_layout.addLayout(row)
+        self.index_radios[settings.index_mode].setChecked(True)
+        self.index_radios["custom"].toggled.connect(self._sync_index_dir)
+        self._sync_index_dir()
+
+        # Two fixed lines: a word-wrapped label gets squashed into the radio
+        # button above it at the dialog's minimum height.
+        note = QLabel("Changing this does not move existing indexes.\n"
+                      "Index > Load Index opens one from anywhere.")
+        note.setProperty("role", "muted")
+        group_layout.addSpacing(4)
+        group_layout.addWidget(note)
+        return group
+
+    def _sync_index_dir(self, *_args):
+        self.edit_index_dir.setEnabled(self.index_radios["custom"].isChecked())
+
+    def _browse_index_dir(self):
+        start = self.edit_index_dir.text() or os.path.expanduser("~")
+        folder = QFileDialog.getExistingDirectory(self, "Folder for Index Files", start)
+        if folder:
+            self.edit_index_dir.setText(folder)
+            self.index_radios["custom"].setChecked(True)
+
+    def selected_index_mode(self):
+        for mode, radio in self.index_radios.items():
+            if radio.isChecked():
+                return mode
+        return "appdata"
 
     def accept(self):
         kinds = {k for k, box in self.kind_boxes.items() if box.isChecked()}
@@ -131,7 +204,16 @@ class OptionsDialog(QDialog):
                                 "Pick at least one kind of file, or enable exact matching "
                                 "of all file types.")
             return
+        mode = self.selected_index_mode()
+        custom_dir = self.edit_index_dir.text().strip()
+        if mode == "custom" and not os.path.isdir(custom_dir):
+            QMessageBox.warning(self, "Scan Options",
+                                "Pick an existing folder for index files, or choose another "
+                                "index location.")
+            return
         s = self.settings
+        s.index_mode = mode
+        s.index_custom_dir = custom_dir
         s.kinds = kinds
         s.all_types = self.chk_all_types.isChecked()
         s.skip_hidden = self.chk_hidden.isChecked()
